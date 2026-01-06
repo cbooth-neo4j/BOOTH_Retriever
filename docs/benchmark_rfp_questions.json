@@ -1,0 +1,308 @@
+{
+  "metadata": {
+    "title": "RFP Analysis Benchmark Dataset",
+    "description": "Benchmark questions for evaluating RAG and graph query systems on RFP documents",
+    "version": "1.0",
+    "created_date": "2024-11-20",
+    "database": "Neo4j",
+    "documents": [
+      {
+        "id": "doc_1",
+        "name": "Dummmy RFP 2",
+        "company": "NovaGrid Energy Corporation",
+        "type": "Global Treasury and Payments Services RFP"
+      },
+      {
+        "id": "doc_2",
+        "name": "RFP_Dummy",
+        "company": "XXX Airline",
+        "type": "Banking Cash Management Services RFP"
+      },
+      {
+        "id": "doc_3",
+        "name": "dummy rfp 3",
+        "company": "AtlasVentures Consulting Group",
+        "type": "Corporate Card and Expense Management RFP"
+      }
+    ],
+    "question_types": {
+      "complex_analytical": "Questions requiring synthesis across multiple documents and deep analysis",
+      "simple_factual": "Questions requiring extraction of specific facts from a single document"
+    }
+  },
+  "questions": [
+    {
+      "id": "q1",
+      "type": "complex_analytical",
+      "difficulty": "hard",
+      "question": "Across all three RFPs, list the top five digital capabilities the companies demand and explain why those capabilities matter to their industries.",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document)\nMATCH (chunk)-[:HAS_ENTITY]->(s:SERVICE)\nWITH s.name as service, s.description as description, \n     collect(DISTINCT doc.name) as documents, \n     count(DISTINCT doc.name) as doc_count\nRETURN service, description, documents, doc_count\nORDER BY doc_count DESC, service",
+      "answer": {
+        "summary": "Top five digital capabilities are: (1) Real-time visibility and reporting, (2) System integration (ERP/TMS/Banking), (3) Multi-currency and global payments processing, (4) Liquidity management and optimization, and (5) Advanced policy controls and risk management.",
+        "detailed_capabilities": [
+          {
+            "capability": "Real-Time Visibility and Reporting",
+            "present_in": ["NovaGrid", "AtlasVentures"],
+            "why_matters": "Energy projects require instant oversight of capital deployed across 23 countries and multiple currencies. Consulting firms need immediate spend visibility for project-based billing and client recharging. Airlines need real-time cash position monitoring for operational continuity."
+          },
+          {
+            "capability": "System Integration (ERP/TMS/Banking)",
+            "present_in": ["NovaGrid", "XXX", "AtlasVentures"],
+            "why_matters": "Complex multi-entity structures require seamless data flow between treasury, accounting, and operational systems. Manual reconciliation is impossible at scale for companies operating globally across diverse regulatory environments."
+          },
+          {
+            "capability": "Multi-Currency and Global Payments Processing",
+            "present_in": ["NovaGrid", "XXX", "AtlasVentures"],
+            "why_matters": "All three operate internationally - NovaGrid in 23 countries, XXX targeting 100+ destinations, AtlasVentures in 45 countries. Currency volatility, cross-border payment efficiency, and local compliance requirements make multi-currency capabilities mission-critical."
+          },
+          {
+            "capability": "Liquidity Management and Optimization",
+            "present_in": ["NovaGrid", "XXX", "AtlasVentures"],
+            "why_matters": "Capital-intensive energy projects require sophisticated cash positioning across project sites. Airlines face seasonal cash flow volatility and high working capital needs. Consulting firms need flexible credit for project ramp-up costs before client payments arrive."
+          },
+          {
+            "capability": "Advanced Policy Controls and Risk Management",
+            "present_in": ["NovaGrid", "XXX", "AtlasVentures"],
+            "why_matters": "Energy developers face commodity price risk and FX exposure from long-term contracts. Airlines need trade finance for aircraft orders and supplier payments. Consulting firms with 3,800 traveling consultants require automated expense policy enforcement to prevent maverick spending and fraud."
+          }
+        ]
+      },
+      "evaluation_criteria": {
+        "correct_identification": "Must identify all 5 capability categories",
+        "industry_context": "Must explain industry-specific reasons for each capability",
+        "cross_document_synthesis": "Must draw from all 3 RFP documents"
+      }
+    },
+    {
+      "id": "q2",
+      "type": "complex_analytical",
+      "difficulty": "hard",
+      "question": "Summarise the ESG‐related banking expectations each company expresses. How do they differ between an energy developer, a consultancy, and an airline‑startup?",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document)\nOPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(s:SERVICE)\nWHERE toLower(s.name) CONTAINS 'esg' OR toLower(s.name) CONTAINS 'sustain'\nOPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(ec:EVALUATION_CRITERIA)\nWHERE toLower(ec.name) CONTAINS 'esg' OR toLower(ec.name) CONTAINS 'sustain'\nOPTIONAL MATCH (chunk)-[:HAS_ENTITY]->(comp:COMPANY)\nWHERE comp.name IN ['NovaGrid Energy Corporation', 'XXX', 'AtlasVentures Consulting Group']\nRETURN doc.name as document, \n       comp.name as company,\n       collect(DISTINCT s.name) as esg_services,\n       collect(DISTINCT ec.name) as esg_criteria\nORDER BY doc.name",
+      "answer": {
+        "summary": "NovaGrid (energy) has explicit and strategic ESG requirements including ESG-linked financial instruments and sustainability reporting as core services. XXX (airline) has moderate compliance-focused ESG expectations with sustainability as an evaluation criterion but no specific financial products. AtlasVentures (consulting) has minimal to absent ESG requirements in their corporate card RFP.",
+        "by_company": [
+          {
+            "company": "NovaGrid Energy Corporation",
+            "industry": "Renewable Energy",
+            "esg_depth": "Explicit & Strategic",
+            "services_requested": [
+              "ESG-Linked Financial Instruments",
+              "Sustainability Reporting Metrics"
+            ],
+            "evaluation_criteria": ["ESG and Sustainability Credentials"],
+            "rationale": "ESG is core business model; green financing unlocks capital at better rates; regulatory necessity in renewable energy"
+          },
+          {
+            "company": "XXX Airline",
+            "industry": "Aviation",
+            "esg_depth": "Moderate & Compliance",
+            "services_requested": [],
+            "evaluation_criteria": ["Sustainability"],
+            "rationale": "Sustainability is reputational and regulatory (CORSIA); not yet integrated into financial product requirements"
+          },
+          {
+            "company": "AtlasVentures Consulting Group",
+            "industry": "Management Consulting",
+            "esg_depth": "Minimal/Absent",
+            "services_requested": [],
+            "evaluation_criteria": [],
+            "rationale": "ESG not material to treasury/expense management operations; focus is efficiency and control"
+          }
+        ],
+        "key_insight": "ESG banking expectations directly correlate with industry exposure to climate regulation, sustainability-linked financing markets, and stakeholder pressure. Energy developers require ESG-integrated financial products; airlines are in transition; professional services firms treat ESG as a corporate responsibility issue separate from banking relationships."
+      },
+      "evaluation_criteria": {
+        "correct_categorization": "Must correctly identify ESG depth for each company",
+        "industry_differences": "Must explain why ESG requirements differ by industry",
+        "evidence_based": "Must cite specific services or criteria from RFPs"
+      }
+    },
+    {
+      "id": "q3",
+      "type": "complex_analytical",
+      "difficulty": "medium",
+      "question": "Which banking capabilities appear in exactly two of the three RFPs? List them and name the two companies.",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document)\nMATCH (chunk)-[:HAS_ENTITY]->(s:SERVICE)\nWITH s.name as service, s.description as description, \n     collect(DISTINCT doc.name) as documents\nWHERE size(documents) = 2\nRETURN service, description, documents\nORDER BY service",
+      "answer": {
+        "exact_matches": [],
+        "note": "Zero capabilities appear with identical naming in exactly two RFPs based on entity extraction.",
+        "semantic_matches": [
+          {
+            "capability": "Real-Time Reporting & Transaction Visibility",
+            "companies": ["NovaGrid Energy Corporation", "AtlasVentures Consulting Group"],
+            "service_names": [
+              "Real-Time Reporting and Dashboards (NovaGrid)",
+              "Real-Time Transaction Visibility (AtlasVentures)"
+            ]
+          },
+          {
+            "capability": "System Integration with Enterprise Platforms",
+            "companies": ["NovaGrid Energy Corporation", "AtlasVentures Consulting Group"],
+            "service_names": [
+              "Integration with TMS/ERP Systems (NovaGrid)",
+              "Direct Integration with Workday and SAP Concur (AtlasVentures)"
+            ]
+          },
+          {
+            "capability": "Advanced Service Governance & Support",
+            "companies": ["NovaGrid Energy Corporation", "AtlasVentures Consulting Group"],
+            "service_names": [
+              "Client Support and Service Governance (NovaGrid)",
+              "Global 24/7 Customer Service (AtlasVentures)"
+            ]
+          }
+        ],
+        "data_quality_note": "Database entity extraction did not group semantically similar capabilities. Answers require semantic analysis of service descriptions to identify functional overlap."
+      },
+      "evaluation_criteria": {
+        "entity_matching": "Should recognize limitations of exact entity matching",
+        "semantic_understanding": "Should identify functionally equivalent capabilities",
+        "company_identification": "Must correctly name the two companies for each capability"
+      }
+    },
+    {
+      "id": "q4",
+      "type": "complex_analytical",
+      "difficulty": "hard",
+      "question": "NovaGrid wants FX hedging and ESG‑linked instruments. Draft a short rationale showing how a single bank could meet both needs.",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document)\nWHERE doc.name = 'Dummmy RFP 2'\nMATCH (chunk)-[:HAS_ENTITY]->(s:SERVICE)\nWHERE s.name IN ['FX Hedging and Risk Management', 'ESG-Linked Financial Instruments']\nRETURN s.name as service, s.description, chunk.text as context",
+      "answer": {
+        "title": "Integrated FX Hedging & ESG-Linked Products for NovaGrid Energy",
+        "challenge": "NovaGrid operates 150+ renewable energy projects across 23 countries, with long-term Power Purchase Agreements typically denominated in local currencies while debt service occurs in EUR/USD. This creates structural FX exposure over 15-25 year project lifecycles. Simultaneously, NovaGrid's cost of capital depends on demonstrating ESG performance to access green bond markets.",
+        "integrated_solutions": [
+          {
+            "product": "ESG-Linked FX Hedging Structures",
+            "description": "Long-dated FX forwards with pricing linked to NovaGrid's sustainability KPIs. Hedge pricing includes sustainability margin adjustment - if targets are exceeded, FX hedge costs decrease by 2-5 bps."
+          },
+          {
+            "product": "Natural Hedge via Green Bond FX Issuance",
+            "description": "Dual-currency green bonds where FX risk is embedded in the bond structure. Bank arranges EUR-denominated bonds funding local currency capex with integrated use-of-proceeds monitoring."
+          },
+          {
+            "product": "Sustainability-Linked Derivative Framework",
+            "description": "Master hedging agreement with ESG performance ratchets. As ESG rating improves, collateral requirements on FX hedging portfolio decrease, improving return on invested capital."
+          },
+          {
+            "product": "Centralized Treasury Platform Integration",
+            "description": "Single API connecting TMS to FX trading desk and ESG data feeds. Unified reporting shows how hedging strategy supports sustainability goals."
+          }
+        ],
+        "why_single_bank": "Requires capital efficiency through cross-product netting, pricing advantage from relationship economics, data integration between ESG certification and derivatives teams, and unified regulatory compliance framework (EU Taxonomy, SFDR, EMIR/MiFID).",
+        "competitive_advantage": "Most banks treat FX hedging and ESG-linked finance as separate businesses. NovaGrid requires unified treasury partnership where sustainability performance directly influences hedging economics."
+      },
+      "evaluation_criteria": {
+        "integration_logic": "Must explain how FX and ESG products connect, not just list them separately",
+        "business_understanding": "Must demonstrate knowledge of energy sector challenges (PPAs, long project cycles, currency mismatch)",
+        "single_bank_rationale": "Must explain why integration requires one bank vs multiple relationships"
+      }
+    },
+    {
+      "id": "q5",
+      "type": "complex_analytical",
+      "difficulty": "hard",
+      "question": "Produce a one‑paragraph executive summary that would brief a bank's steering committee on common pain points these clients face when expanding internationally.",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document)\nMATCH (chunk)-[:HAS_ENTITY]->(service:SERVICE)\nWHERE service.name IN [\n  'KYC/Onboarding Efficiency for New Markets',\n  'Multi-Currency Liquidity Management',\n  'Global Payments Processing',\n  'Account Rationalization',\n  'Trade Finance Capabilities',\n  'Integration with TMS/ERP Systems'\n]\nWITH doc, chunk, service\nMATCH (chunk)-[:HAS_ENTITY]->(comp:COMPANY)\nRETURN doc.name as document, \n       comp.name as company, \n       collect(DISTINCT service.name) as pain_point_services\nORDER BY doc.name",
+      "answer": {
+        "executive_summary": "Across three diverse clients—a renewable energy developer operating in 23 countries, a newly launched national airline targeting 100+ destinations, and a global consultancy with 60 offices in 45 countries—we observe four critical pain points when expanding internationally: (1) Fragmented liquidity management requiring multi-currency cash pooling, real-time visibility across entities, and optimized capital allocation (all three clients demand sophisticated liquidity solutions and consolidated reporting); (2) Onboarding friction in new markets where KYC delays, local regulatory complexity, and account opening timelines impede speed-to-market (NovaGrid explicitly requests 'KYC/Onboarding Efficiency for New Markets'); (3) System integration gaps where siloed banking platforms fail to connect seamlessly with clients' ERP, TMS, and operational systems, forcing manual reconciliation that becomes untenable at scale (all three require deep API-level integration); and (4) Misaligned product bundling where traditional banks offer commoditized services rather than industry-specific solutions—energy developers need FX hedging tied to 20-year PPA cashflows and ESG-linked instruments, airlines require trade finance for aircraft orders and seasonal working capital swings, and consulting firms need AI-driven expense policy enforcement for distributed employee spending. These pain points converge on a single strategic imperative: clients no longer accept transactional banking relationships and instead demand unified digital platforms, proactive liquidity optimization, frictionless market entry, and industry-specialized structuring capabilities—suggesting our competitive response must center on treasury-as-a-service models, accelerated onboarding workflows (target: <10 days for new entity activation), and sector-specific coverage teams with mandate authority to customize product configurations.",
+        "key_pain_points": [
+          "Fragmented liquidity management across multiple countries/entities",
+          "Onboarding friction and KYC delays in new markets",
+          "System integration gaps forcing manual reconciliation",
+          "Misaligned product bundling lacking industry-specific solutions"
+        ],
+        "strategic_implications": [
+          "Treasury-as-a-service models required",
+          "Accelerated onboarding workflows (<10 days target)",
+          "Sector-specific coverage teams with customization authority",
+          "Unified digital platforms, not siloed products"
+        ]
+      },
+      "evaluation_criteria": {
+        "synthesis_quality": "Must synthesize across all three companies",
+        "pain_point_identification": "Must identify at least 3-4 major pain points",
+        "executive_appropriate": "Should be concise, strategic, and actionable for steering committee",
+        "evidence_based": "Must ground claims in specific RFP requirements"
+      }
+    },
+    {
+      "id": "q6",
+      "type": "simple_factual",
+      "difficulty": "easy",
+      "question": "What is NovaGrid Energy Corporation's annual revenue and how many employees does the company have?",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document {name: 'Dummmy RFP 2'})\nMATCH (chunk)-[:HAS_ENTITY]->(entity)\nWHERE entity.name IN ['€4.2 billion', '7,200']\nRETURN entity.name as value, entity.description as description",
+      "answer": {
+        "annual_revenue": "€4.2 billion",
+        "employees": "7,200 globally",
+        "source_document": "Dummmy RFP 2"
+      },
+      "evaluation_criteria": {
+        "factual_accuracy": "Must provide exact figures from the document",
+        "completeness": "Must answer both parts of the question (revenue and employees)"
+      }
+    },
+    {
+      "id": "q7",
+      "type": "simple_factual",
+      "difficulty": "easy",
+      "question": "What is the final proposal submission deadline for XXX airline's RFP?",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document {name: 'RFP_Dummy'})\nMATCH (chunk)-[:HAS_ENTITY]->(date:DATE)\nWHERE date.description CONTAINS 'Deadline for responses' OR date.description CONTAINS 'proposal'\nRETURN date.name as deadline, date.description as description",
+      "answer": {
+        "deadline": "Thursday, August 1st, 2024",
+        "time": "5:00pm ZZZ time",
+        "note": "Responses received after this time will not be considered unless XXX in its sole discretion agrees to extend the deadline.",
+        "source_document": "RFP_Dummy"
+      },
+      "evaluation_criteria": {
+        "factual_accuracy": "Must provide exact date and time",
+        "specificity": "Should include timezone reference if available"
+      }
+    },
+    {
+      "id": "q8",
+      "type": "simple_factual",
+      "difficulty": "easy",
+      "question": "Where is AtlasVentures Consulting Group headquartered and in how many countries does it operate?",
+      "cypher_query": "MATCH (chunk:Chunk)-[:PART_OF]->(doc:Document {name: 'dummy rfp 3'})\nMATCH (chunk)-[:HAS_ENTITY]->(entity)\nWHERE entity.name IN ['Toronto', 'Canada', '45 countries'] \n   OR entity.description CONTAINS 'headquartered' \n   OR entity.description CONTAINS 'countries'\nRETURN entity.name as value, entity.description as description",
+      "answer": {
+        "headquarters_city": "Toronto",
+        "headquarters_country": "Canada",
+        "countries_of_operation": "45 countries",
+        "additional_context": "The company has 60 offices across these 45 countries",
+        "source_document": "dummy rfp 3"
+      },
+      "evaluation_criteria": {
+        "factual_accuracy": "Must correctly identify Toronto, Canada",
+        "completeness": "Must answer both parts (headquarters location and number of countries)"
+      }
+    }
+  ],
+  "evaluation_metrics": {
+    "factual_accuracy": {
+      "description": "Percentage of factual claims that are correct based on source documents",
+      "weight": 0.3
+    },
+    "completeness": {
+      "description": "Percentage of question components answered (e.g., all 5 capabilities listed for Q1)",
+      "weight": 0.25
+    },
+    "synthesis_quality": {
+      "description": "For complex questions, quality of cross-document synthesis and insight generation",
+      "weight": 0.25
+    },
+    "query_correctness": {
+      "description": "Whether generated Cypher queries execute successfully and return relevant data",
+      "weight": 0.2
+    }
+  },
+  "usage_notes": {
+    "purpose": "This benchmark is designed to evaluate RAG systems, graph query generation, and analytical reasoning over RFP documents.",
+    "complexity_levels": {
+      "easy": "Single document, direct fact extraction (Q6-Q8)",
+      "medium": "Multi-document matching with limited synthesis (Q3)",
+      "hard": "Multi-document synthesis, analytical reasoning, business context required (Q1, Q2, Q4, Q5)"
+    },
+    "recommended_evaluation": "Use a combination of automated metrics (factual accuracy via entity matching) and human evaluation (synthesis quality, business insight depth) for comprehensive assessment."
+  }
+}
+
