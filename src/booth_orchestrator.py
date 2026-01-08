@@ -1,14 +1,24 @@
-"""Main BOOTH orchestrator implementing the complete flow logic."""
+"""Main BOOTH orchestrator implementing the complete flow logic.
+
+Updated for v2 data model (see docs/data_model.md):
+- UserQuestion: Individual user questions with embeddings
+- QueryTemplate: Parameterized question patterns for instant matching
+- FewShotCypher: Approved parameterized Cypher queries
+
+Flow:
+1. Check QueryTemplates for instant execution (>90% similarity)
+   - If match: Extract params, run parameterized Cypher, NO LLM NEEDED
+2. If no template match, run agentic exploration
+3. On approval: Trigger refinement agent to create template
+"""
 
 import os
 import json
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.llm_client import LLMClient
 from src.neo4j_client import Neo4jClient
-from src.cypher_verification import CypherVerifier, VerifierType
-from src.cypher_correction import CypherCorrector, CorrectionType
 from src.logger import setup_logger
 
 logger = setup_logger("booth.orchestrator")
@@ -26,6 +36,8 @@ class BOOTHResponse:
     cypher_used: Optional[str] = None
     raw_data: Optional[Any] = None
     error_message: Optional[str] = None
+    tool_used: Optional[str] = None  # Track which retriever was used
+    pending_feedback: bool = False  # Whether user feedback is pending
 
 
 class BOOTHOrchestrator:
@@ -35,11 +47,13 @@ class BOOTHOrchestrator:
     Workflow:
     1. Embed user query
     2. Check for similar approved queries (>90% similarity)
-       - If match found: Use cached few-shot prompt -> Generate cypher -> Execute
+       - If match found: Use cached few-shot prompt -> Agent query
     3. If no match: User marks as high-risk or safe
-       - If high-risk: Decline and store
-       - If safe: Generate cypher with retry logic
+       - If high-risk: Decline and store, but run agent in background for review
+       - If safe: Run agent with exploratory mode
     4. Store results for human curation
+    
+    Uses the Agentic Text2Cypher retriever (Deep Agent) for query execution.
     """
     
     def __init__(
@@ -55,60 +69,27 @@ class BOOTHOrchestrator:
         """
         self.llm_client = llm_client or LLMClient()
         self.neo4j_client = neo4j_client or Neo4jClient()
-        self.max_retries = int(os.getenv("MAX_CYPHER_RETRIES", "3"))
         
-        # Initialize verification and correction components
-        self.verifier = CypherVerifier(
-            neo4j_client=self.neo4j_client,
-            llm_client=self.llm_client
-        )
-        self.corrector = CypherCorrector(
-            llm_client=self.llm_client,
-            neo4j_client=self.neo4j_client
-        )
-        
-        # Configure verification and correction methods from environment
-        self.verifier_types = self._parse_verifier_types()
-        self.correction_types = self._parse_correction_types()
-        self.use_verification_metadata = os.getenv("USE_VERIFICATION_METADATA", "true").lower() == "true"
+        # Initialize BOOTH Agent
+        self.agent = None
+        self._init_agent()
     
-    def _parse_verifier_types(self) -> List[VerifierType]:
-        """Parse verifier types from environment variables."""
-        verifier_config = os.getenv("CYPHER_VERIFIERS", "RULE_BASED,EXECUTION_BASED")
-        verifier_names = [v.strip().upper() for v in verifier_config.split(",")]
-        verifiers = []
-        
-        for name in verifier_names:
-            try:
-                verifiers.append(VerifierType[name])
-            except KeyError:
-                logger.warning(f"Unknown verifier type: {name}")
-        
-        if not verifiers:
-            logger.warning("No valid verifiers configured, using RULE_BASED as default")
-            verifiers = [VerifierType.RULE_BASED]
-        
-        logger.info(f"Configured verifiers: {[v.value for v in verifiers]}")
-        return verifiers
-    
-    def _parse_correction_types(self) -> List[CorrectionType]:
-        """Parse correction types from environment variables."""
-        correction_config = os.getenv("CYPHER_CORRECTORS", "RULE_BASED,LLM_BASED")
-        correction_names = [c.strip().upper() for c in correction_config.split(",")]
-        correctors = []
-        
-        for name in correction_names:
-            try:
-                correctors.append(CorrectionType[name])
-            except KeyError:
-                logger.warning(f"Unknown correction type: {name}")
-        
-        if not correctors:
-            logger.warning("No valid correctors configured, using RULE_BASED as default")
-            correctors = [CorrectionType.RULE_BASED]
-        
-        logger.info(f"Configured correctors: {[c.value for c in correctors]}")
-        return correctors
+    def _init_agent(self):
+        """Initialize the BOOTH Agent."""
+        try:
+            from src.agents.booth_agent import BOOTHAgent
+            self.agent = BOOTHAgent(
+                neo4j_client=self.neo4j_client,
+                llm_client=self.llm_client
+            )
+            logger.info("BOOTH Agent initialized successfully")
+        except ImportError as e:
+            logger.error(f"Failed to initialize BOOTH Agent: {e}")
+            logger.error("Install Deep Agents with: pip install deepagents")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to initialize BOOTH Agent: {e}")
+            raise
     
     def process_query(
         self,
@@ -116,6 +97,16 @@ class BOOTHOrchestrator:
         is_high_risk: bool = False
     ) -> BOOTHResponse:
         """Process a user query through the BOOTH workflow.
+        
+        Flow (v3 - simplified):
+        1. Embed user query
+        2. Search for similar approved Query nodes (verbatim matching)
+           - If match: Store UserQuestion linked via SIMILAR, use FewShot cypher
+        3. If no match and high-risk: Decline, run agent in background
+        4. If no match and safe: Create new Query, run agent
+        
+        UserQuestions cluster around Query nodes via SIMILAR relationships.
+        Query nodes have the embeddings, FewShot examples, and Tool recommendations.
         
         Args:
             user_query: Natural language query from user.
@@ -132,16 +123,19 @@ class BOOTHOrchestrator:
             embedding = self.llm_client.get_embedding(user_query)
             logger.debug(f"Embedding generated successfully (dimension: {len(embedding)})")
             
-            # Step 2: Check for similar approved queries (HNSW search)
+            # Step 2: Search for similar approved Query nodes
             logger.debug("Searching for similar approved queries")
             similar_queries = self.neo4j_client.find_similar_queries(embedding, k=5)
             
             if similar_queries:
-                # High similarity match found - use few-shot prompt
-                logger.info(f"Found {len(similar_queries)} similar queries (best score: {similar_queries[0]['score']:.4f})")
-                return self._handle_similar_match(user_query, embedding, similar_queries)
+                # High similarity match found - use the approved Query's FewShot
+                best_match = similar_queries[0]
+                logger.info(f"Found similar query! (score: {best_match['score']:.4f})")
+                return self._handle_similar_match(
+                    user_query, embedding, similar_queries, is_high_risk
+                )
             
-            logger.info("No similar queries found above threshold")
+            logger.info("No similar approved queries found above threshold")
             
             # Step 3: No similar match - check risk level
             if is_high_risk:
@@ -149,7 +143,7 @@ class BOOTHOrchestrator:
                 logger.warning(f"Query marked as high-risk by user, declining")
                 return self._handle_high_risk_query(user_query, embedding)
             
-            # Step 4: Safe query - proceed with text-to-cypher
+            # Step 4: Safe query - proceed with agent in exploratory mode
             logger.info("Processing as new query (no similar match, safe)")
             return self._handle_new_query(user_query, embedding)
             
@@ -161,47 +155,294 @@ class BOOTHOrchestrator:
                 error_message=str(e)
             )
     
+    def _handle_template_match(
+        self,
+        user_query: str,
+        embedding: List[float],
+        template_match: Dict[str, Any],
+        is_high_risk: bool
+    ) -> BOOTHResponse:
+        """Handle instant execution via matched QueryTemplate.
+        
+        This is the FAST PATH - no LLM inference needed!
+        We extract parameters and run the pre-approved Cypher directly.
+        """
+        logger.info("INSTANT EXECUTION: Using matched template (no LLM needed)")
+        
+        try:
+            # Extract parameters from user query using LLM
+            extracted_params = self._extract_parameters(
+                user_query=user_query,
+                template=template_match['template'],
+                parameters=template_match.get('parameters', [])
+            )
+            
+            if not extracted_params:
+                logger.warning("Could not extract parameters, falling back to agentic mode")
+                return self._handle_new_query(user_query, embedding)
+            
+            # Build the parameterized Cypher
+            cypher_template = template_match['cypher_template']
+            cypher_params = template_match.get('cypher_parameters', [])
+            
+            # Execute the Cypher with extracted parameters
+            success, result_data, error = self._execute_parameterized_cypher(
+                cypher_template=cypher_template,
+                params=extracted_params
+            )
+            
+            if not success:
+                logger.warning(f"Template execution failed: {error}, falling back to agentic mode")
+                return self._handle_new_query(user_query, embedding)
+            
+            # Generate a summary from the results
+            summary = self._summarize_results(user_query, result_data)
+            
+            # Store the UserQuestion (new model)
+            try:
+                question_id = self.neo4j_client.store_user_question(
+                    text=user_query,
+                    embedding=embedding,
+                    status="approved",  # Auto-approved since we used a template
+                    risk_level="low",
+                    extracted_params=extracted_params
+                )
+                
+                # Link to the template
+                self.neo4j_client.link_question_to_template(
+                    question_id=question_id,
+                    template_id=template_match['id'],
+                    similarity_score=template_match['score'],
+                    is_instance=False  # Not a defining instance, just a usage
+                )
+            except Exception as e:
+                logger.warning(f"Could not store UserQuestion: {e}")
+                question_id = None
+            
+            logger.info(f"Instant execution successful (category: {template_match.get('category')})")
+            
+            return BOOTHResponse(
+                success=True,
+                answer=summary,
+                query_id=question_id,
+                similar_match=True,
+                high_risk=is_high_risk,
+                declined=False,
+                cypher_used=cypher_template,
+                raw_data=result_data,
+                tool_used="template_instant",  # New tool type for tracking
+                pending_feedback=False  # No feedback needed for template matches
+            )
+            
+        except Exception as e:
+            logger.error(f"Template execution error: {e}", exc_info=True)
+            # Fall back to agentic mode
+            return self._handle_new_query(user_query, embedding)
+    
+    def _extract_parameters(
+        self,
+        user_query: str,
+        template: str,
+        parameters: List[str]
+    ) -> Optional[Dict[str, str]]:
+        """Extract parameter values from user query using the template.
+        
+        Args:
+            user_query: The actual user question
+            template: The parameterized template (e.g., "What {attribute} did {person} hold?")
+            parameters: List of parameter names
+            
+        Returns:
+            Dict of parameter values or None if extraction failed
+        """
+        if not parameters:
+            return {}
+        
+        prompt = f"""Extract parameter values from this question based on the template.
+
+Template: {template}
+Parameters needed: {', '.join(parameters)}
+User question: {user_query}
+
+Return a JSON object with the parameter values. Example:
+{{"person": "Shirley Temple", "attribute": "government position"}}
+
+Only return the JSON object, nothing else."""
+
+        try:
+            response = self.llm_client.client.chat.completions.create(
+                model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=200
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON from response
+            import re
+            json_match = re.search(r'\{[^}]+\}', result_text)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(result_text)
+            
+        except Exception as e:
+            logger.warning(f"Parameter extraction failed: {e}")
+            return None
+    
+    def _execute_parameterized_cypher(
+        self,
+        cypher_template: str,
+        params: Dict[str, str]
+    ) -> tuple:
+        """Execute a parameterized Cypher query.
+        
+        Args:
+            cypher_template: Cypher with $param placeholders
+            params: Parameter values to substitute
+            
+        Returns:
+            Tuple of (success, result_data, error_message)
+        """
+        try:
+            with self.neo4j_client.driver.session() as session:
+                result = session.run(cypher_template, **params)
+                data = [dict(record) for record in result]
+                return True, data, None
+        except Exception as e:
+            return False, None, str(e)
+    
+    def _summarize_results(
+        self,
+        user_query: str,
+        result_data: List[Dict]
+    ) -> str:
+        """Generate a natural language summary of query results."""
+        if not result_data:
+            return "No results found for this query."
+        
+        # Format results for summarization
+        results_text = json.dumps(result_data[:10], indent=2, default=str)
+        
+        prompt = f"""Based on these database results, provide a concise answer to the question.
+
+Question: {user_query}
+
+Results:
+{results_text}
+
+Provide a direct, factual answer based on the data. Be specific and cite relevant details."""
+
+        try:
+            response = self.llm_client.client.chat.completions.create(
+                model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=500
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning(f"Summarization failed: {e}")
+            return f"Found {len(result_data)} results. Raw data: {results_text[:500]}..."
+    
     def _handle_similar_match(
         self,
         user_query: str,
         embedding: List[float],
-        similar_queries: List[Dict]
+        similar_queries: List[Dict],
+        is_high_risk: bool
     ) -> BOOTHResponse:
-        """Handle query with high similarity match."""
-        # Get the best match
-        best_match = similar_queries[0]
-        logger.info(f"Using similar match (score: {best_match['score']:.4f}, text: '{best_match['text'][:50]}...')")
+        """Handle query with high similarity match.
         
-        # Store the new query with similarity match
-        logger.debug("Storing new query with similarity match flag")
+        New flow (v3):
+        1. Store UserQuestion linked to matched Query via SIMILAR
+        2. If Query has FewShot cypher, execute it directly (instant path)
+        3. Fall back to agent with context if no FewShot or execution fails
+        """
+        best_match = similar_queries[0]
+        logger.info(f"Similar match found (score: {best_match['score']:.4f}, text: '{best_match['text'][:50]}...')")
+        
+        # Store UserQuestion linked to the matched Query via SIMILAR
+        user_question_id = self.neo4j_client.store_user_question(
+            text=user_query,
+            risk_level="high" if is_high_risk else "low",
+            matched_query_id=best_match['id'],
+            similarity_score=best_match['score']
+        )
+        logger.info(f"Stored UserQuestion {user_question_id} linked to Query {best_match['id']}")
+        
+        # Check if matched Query has a FewShot cypher for instant execution
+        few_shot_cypher = best_match.get('few_shot_cypher')
+        
+        if few_shot_cypher:
+            logger.info("INSTANT PATH: Using FewShot cypher from matched Query")
+            
+            # Execute the FewShot cypher directly
+            success, result_data, error = self._execute_parameterized_cypher(
+                cypher_template=few_shot_cypher,
+                params={}  # TODO: Extract params from user query if parameterized
+            )
+            
+            if success:
+                # Generate summary from results
+                summary = self._summarize_results(user_query, result_data)
+                
+                logger.info(f"Instant execution successful (query_id: {user_question_id})")
+                return BOOTHResponse(
+                    success=True,
+                    answer=summary,
+                    query_id=user_question_id,
+                    similar_match=True,
+                    high_risk=is_high_risk,
+                    declined=False,
+                    cypher_used=few_shot_cypher,
+                    raw_data=result_data,
+                    tool_used="few_shot_instant",
+                    pending_feedback=True  # Still want user feedback
+                )
+            else:
+                logger.warning(f"FewShot execution failed: {error}, falling back to agent")
+        
+        # Fall back to agent with context from similar queries
+        logger.info("Using agent with few-shot context from similar queries")
+        
+        # For agent path, we still need a Query node to track the cypher attempts
+        # Create one linked to the UserQuestion
         query_id = self.neo4j_client.store_query(
             text=user_query,
             embedding=embedding,
             status="pending_approval",
             similarity_matched=True
         )
-        logger.info(f"Stored query with ID: {query_id}")
         
-        # Link to similar query
-        logger.debug(f"Linking to similar query: {best_match['id']}")
-        self.neo4j_client.link_similar_queries(
-            query_id, 
-            best_match['id'], 
-            best_match['score']
+        # Build context for the agent
+        few_shot_examples = []
+        for q in similar_queries:
+            if q.get('few_shot_cypher'):
+                few_shot_examples.append({
+                    "query": q['text'],
+                    "cypher": q['few_shot_cypher']
+                })
+        
+        matched_context = {
+            "query_id": best_match['id'],
+            "query_text": best_match['text'],
+            "similarity_score": best_match['score'],
+            "cypher_template": few_shot_cypher,
+            "few_shot_examples": few_shot_examples
+        }
+        
+        # Invoke the agent
+        agent_result = self.agent.invoke(
+            user_query=user_query,
+            query_id=query_id,
+            is_high_risk=is_high_risk,
+            matched_query_context=matched_context
         )
         
-        # Get few-shot examples from similar queries
-        similar_ids = [q['id'] for q in similar_queries]
-        logger.debug(f"Retrieving few-shot examples for {len(similar_ids)} similar queries")
-        few_shot_examples = self.neo4j_client.get_few_shot_examples(similar_ids)
-        logger.info(f"Retrieved {len(few_shot_examples)} few-shot examples")
-        
-        # Generate and execute cypher with few-shot examples
-        return self._generate_and_execute_cypher(
-            query_id,
-            user_query,
-            few_shot_examples=few_shot_examples,
-            similarity_matched=True
+        # Store the results
+        return self._process_agent_result(
+            agent_result, query_id, is_high_risk, similarity_matched=True
         )
     
     def _handle_high_risk_query(
@@ -211,14 +452,12 @@ class BOOTHOrchestrator:
     ) -> BOOTHResponse:
         """Handle query marked as high-risk.
         
-        Runs the full text2cypher iterative refinement pipeline in the background
-        (including verification, correction, and execution) but declines showing
-        results to the user. All attempts and results are stored for review in
-        the Train AI page, giving curators full context about what would have happened.
+        IMMEDIATELY declines to the user, then schedules background agent work.
+        This ensures the user is not left waiting while the agent runs.
         """
-        logger.warning(f"Declining high-risk query to user, but running text2cypher pipeline for review: '{user_query[:100]}...'")
+        logger.warning(f"Declining high-risk query to user: '{user_query[:100]}...'")
         
-        # Store query as declined
+        # Store query as declined FIRST
         query_id = self.neo4j_client.store_query(
             text=user_query,
             embedding=embedding,
@@ -227,56 +466,202 @@ class BOOTHOrchestrator:
         )
         logger.info(f"High-risk query stored with ID: {query_id} (status: declined)")
         
-        # Run the full text2cypher pipeline in background (for review purposes)
-        # This generates, verifies, corrects, and executes the query but results
-        # are not shown to the user - only stored for curator review
-        pipeline_result = None
-        try:
-            logger.info("Running full text2cypher pipeline for high-risk query (results hidden from user)")
-            
-            # Run the complete pipeline as if it were a normal query
-            pipeline_result = self._generate_and_execute_cypher(
-                query_id=query_id,
-                user_query=user_query,
-                few_shot_examples=None,
-                similarity_matched=False
-            )
-            
-            logger.info(f"Pipeline completed for high-risk query: success={pipeline_result.success}")
-            if pipeline_result.success:
-                logger.info("Text2cypher succeeded - results stored for review (not shown to user)")
-            else:
-                logger.info("Text2cypher failed - attempts stored for review")
-                
-        except Exception as e:
-            logger.error(f"Error running text2cypher pipeline for high-risk query: {str(e)}", exc_info=True)
-            # Store the error
-            self.neo4j_client.store_cypher_attempt(
-                query_id=query_id,
-                cypher_text="",
-                attempt_number=1,
-                success=False,
-                error_message=f"Pipeline error: {str(e)}"
-            )
+        # Schedule background processing (agent + refinement) in a separate thread
+        # so the user gets their decline message immediately
+        import threading
         
-        # Return declined response to user (don't show pipeline results)
-        # But store the cypher_used so it can be referenced if needed
+        def _background_processing():
+            """Run agent and refinement in background thread."""
+            try:
+                logger.info(f"Background processing started for high-risk query {query_id}")
+                
+                agent_result = self.agent.invoke(
+                    user_query=user_query,
+                    query_id=query_id,
+                    is_high_risk=True,
+                    matched_query_context=None
+                )
+                
+                # Store the agent results for review
+                cypher_used = agent_result.get("cypher_used")
+                cypher_attempt_id = None
+                if cypher_used or agent_result.get("tool_used"):
+                    cypher_attempt_id = self.neo4j_client.store_cypher_attempt(
+                        query_id=query_id,
+                        cypher_text=cypher_used or f"Tool: {agent_result.get('tool_used')}",
+                        attempt_number=1,
+                        success=agent_result.get("success", False),
+                        error_message=agent_result.get("error_message")
+                    )
+                    
+                    if agent_result.get("raw_data"):
+                        self.neo4j_client.store_response(
+                            cypher_attempt_id=cypher_attempt_id,
+                            result_data=agent_result.get("raw_data"),
+                            summary=agent_result.get("answer", "")
+                        )
+                
+                logger.info(f"Agent completed for high-risk query {query_id}: success={agent_result.get('success')}")
+                
+                # Automatically run refinement to create parameterized template
+                if agent_result.get("answer") and cypher_attempt_id:
+                    self._run_background_refinement(
+                        query_id=query_id,
+                        cypher_id=cypher_attempt_id,
+                        user_query=user_query,
+                        agent_result=agent_result,
+                        embedding=embedding
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Background processing error for query {query_id}: {str(e)}", exc_info=True)
+                try:
+                    self.neo4j_client.store_cypher_attempt(
+                        query_id=query_id,
+                        cypher_text="",
+                        attempt_number=1,
+                        success=False,
+                        error_message=f"Agent error: {str(e)}"
+                    )
+                except Exception as store_err:
+                    logger.error(f"Failed to store error for query {query_id}: {store_err}")
+        
+        # Start background thread - user doesn't wait for this
+        thread = threading.Thread(target=_background_processing, daemon=True)
+        thread.start()
+        logger.info(f"Background processing thread started for query {query_id}")
+        
+        # Return declined response to user IMMEDIATELY
+        # Be explicit that no similar query was found - this is important feedback
         return BOOTHResponse(
             success=False,
-            answer="This query has been declined due to high risk. It has been logged for review.",
+            answer="⚠️ **No similar approved query found.** This query has been declined due to high risk. The system is generating a response in the background for review in the Train AI page.",
             query_id=query_id,
             high_risk=True,
             declined=True,
-            cypher_used=pipeline_result.cypher_used if pipeline_result else None
+            cypher_used=None,  # Not available yet - running in background
+            tool_used="agentic_text2cypher"
         )
+    
+    def _run_background_refinement(
+        self,
+        query_id: str,
+        cypher_id: str,
+        user_query: str,
+        agent_result: Dict[str, Any],
+        embedding: List[float]
+    ):
+        """Run refinement agent in background to create parameterized template.
+        
+        This runs after a high-risk query's agent completes. Creates a refined
+        template ready for curator review, rather than just storing raw attempts.
+        """
+        try:
+            from src.agents.refinement_agent import create_refinement_agent
+            
+            logger.info(f"Running background refinement for declined query {query_id}")
+            
+            refinement_agent = create_refinement_agent(
+                neo4j_client=self.neo4j_client
+            )
+            
+            # Get existing categories and similar templates for context
+            existing_categories = self.neo4j_client.get_existing_categories()
+            similar_templates = self.neo4j_client.find_similar_templates(embedding, k=3, threshold=0.7)
+            
+            # Extract queries executed from raw_data
+            queries_executed = []
+            raw_data = agent_result.get("raw_data", {})
+            if isinstance(raw_data, dict):
+                queries_executed = raw_data.get("queries_executed", [])
+            
+            # Run refinement
+            result = refinement_agent.refine(
+                original_question=user_query,
+                multi_step_queries=queries_executed,
+                approved_answer=agent_result.get("answer", ""),
+                existing_categories=existing_categories,
+                similar_templates=similar_templates
+            )
+            
+            if result.success:
+                logger.info(f"Background refinement successful for query {query_id}")
+                
+                # Create the template embedding from the parameterized template
+                template_embedding = self.llm_client.get_embedding(result.question_template)
+                
+                # Store the QueryTemplate (but not yet approved - curator decides)
+                template_id = self.neo4j_client.store_query_template(
+                    template=result.question_template,
+                    category=result.category,
+                    embedding=template_embedding,
+                    parameters=result.parameters,
+                    status="pending_approval"  # Curator must approve
+                )
+                
+                # Store the FewShotCypher
+                self.neo4j_client.store_few_shot_cypher(
+                    template_id=template_id,
+                    cypher_template=result.refined_cypher,
+                    parameters=result.parameters,
+                    refinement_attempts=result.attempts,
+                    source_question_id=query_id
+                )
+                
+                # Link the original question to the template
+                self.neo4j_client.link_question_to_template(
+                    question_id=query_id,
+                    template_id=template_id,
+                    similarity_score=1.0,
+                    is_instance=True
+                )
+                
+                # Update the cypher attempt with refined info
+                self._update_cypher_with_refinement(cypher_id, result)
+                
+                logger.info(f"Background refinement stored: template_id={template_id}, category={result.category}")
+            else:
+                logger.warning(f"Background refinement failed for query {query_id}: {result.error}")
+                # Mark as needs human support so curator knows refinement failed
+                self._mark_needs_human_support(query_id, result.error or "Refinement failed")
+                
+        except ImportError as e:
+            logger.warning(f"Refinement agent not available for background refinement: {e}")
+        except Exception as e:
+            logger.error(f"Background refinement error for query {query_id}: {e}", exc_info=True)
+    
+    def _update_cypher_with_refinement(self, cypher_id: str, refinement_result):
+        """Update a CypherAttempt with refinement results."""
+        try:
+            # Serialize parameters list to JSON string for Neo4j storage
+            parameters_json = json.dumps(refinement_result.parameters) if refinement_result.parameters else "[]"
+            
+            with self.neo4j_client.driver.session() as session:
+                # Use dict to avoid 'parameters' kwarg conflict with Neo4j
+                session.run("""
+                    MATCH (c:CypherAttempt {id: $cypher_id})
+                    SET c.refined_cypher = $refined_cypher,
+                        c.question_template = $question_template,
+                        c.category = $category,
+                        c.parameters = $param_json,
+                        c.refinement_success = true
+                """, {
+                    "cypher_id": cypher_id,
+                    "refined_cypher": refinement_result.refined_cypher,
+                    "question_template": refinement_result.question_template,
+                    "category": refinement_result.category,
+                    "param_json": parameters_json
+                })
+        except Exception as e:
+            logger.warning(f"Could not update cypher with refinement: {e}")
     
     def _handle_new_query(
         self,
         user_query: str,
         embedding: List[float]
     ) -> BOOTHResponse:
-        """Handle new query with no similar matches."""
-        logger.debug("Handling new query (no similarity match)")
+        """Handle new query with no similar matches using BOOTH Agent."""
+        logger.info("Handling new query with BOOTH Agent (exploratory mode)")
         
         # Store query
         query_id = self.neo4j_client.store_query(
@@ -287,184 +672,128 @@ class BOOTHOrchestrator:
         )
         logger.info(f"Stored new query with ID: {query_id}")
         
-        # Generate and execute cypher without few-shot examples
-        logger.debug("Proceeding to generate Cypher without few-shot examples")
-        return self._generate_and_execute_cypher(
-            query_id,
-            user_query,
-            few_shot_examples=None,
-            similarity_matched=False
+        # Invoke the agent without context (exploratory mode)
+        agent_result = self.agent.invoke(
+            user_query=user_query,
+            query_id=query_id,
+            is_high_risk=False,
+            matched_query_context=None
+        )
+        
+        # Store the results
+        return self._process_agent_result(
+            agent_result, query_id, is_high_risk=False, similarity_matched=False
         )
     
-    def _generate_and_execute_cypher(
+    def _process_agent_result(
         self,
+        agent_result: Dict[str, Any],
         query_id: str,
-        user_query: str,
-        few_shot_examples: Optional[List[Dict]] = None,
-        similarity_matched: bool = False
+        is_high_risk: bool,
+        similarity_matched: bool
     ) -> BOOTHResponse:
-        """Generate Cypher query and execute with iterative refinement loop.
+        """Process the result from the BOOTH Agent and store appropriately."""
         
-        Implements the verification-correction loop as described in:
-        https://neo4j.com/blog/developer/iterative-refinement-for-text2cypher/
+        success = agent_result.get("success", False)
+        answer = agent_result.get("answer", "No answer generated")
+        tool_used = agent_result.get("tool_used", "agentic_text2cypher")
+        cypher_used = agent_result.get("cypher_used")
+        raw_data = agent_result.get("raw_data")
+        error_message = agent_result.get("error_message")
         
-        Loop:
-        1. Generate Cypher query
-        2. Verify using configured verifiers
-        3. If valid -> Execute
-        4. If invalid or execution fails -> Correct and retry
-        5. Repeat until max iterations or success
-        """
-        # Get database schema
-        logger.debug("Retrieving database schema")
-        schema = self.neo4j_client.get_database_schema()
-        logger.debug("Database schema retrieved")
-        
-        cypher_query = None
-        error_feedback = None
-        
-        for iteration in range(1, self.max_retries + 1):
-            logger.info(f"=== Iteration {iteration}/{self.max_retries} ===")
-            
-            # STEP 1: Generate or Correct Cypher query
-            if iteration == 1:
-                # First iteration: Generate new query
-                logger.info("Generating initial Cypher query")
-                try:
-                    logger.debug(f"Generating Cypher (with {len(few_shot_examples) if few_shot_examples else 0} few-shot examples)")
-                    cypher_query = self.llm_client.generate_cypher(
-                        user_query=user_query,
-                        schema=schema,
-                        few_shot_examples=few_shot_examples,
-                        error_feedback=None
-                    )
-                    logger.info(f"Generated Cypher: {cypher_query[:200]}{'...' if len(cypher_query) > 200 else ''}")
-                    
-                except Exception as e:
-                    error_message = f"Failed to generate Cypher: {str(e)}"
-                    logger.error(f"Cypher generation failed: {error_message}", exc_info=True)
-                    
-                    # Store failed attempt
-                    self.neo4j_client.store_cypher_attempt(
-                        query_id=query_id,
-                        cypher_text="",
-                        attempt_number=iteration,
-                        success=False,
-                        error_message=error_message
-                    )
-                    error_feedback = error_message
-                    continue
-            else:
-                # Subsequent iterations: Correct based on previous error
-                logger.info(f"Attempting correction (iteration {iteration})")
-                correction_result = self.corrector.correct(
-                    cypher_query=cypher_query,
-                    user_query=user_query,
-                    error_message=error_feedback,
-                    correction_types=self.correction_types,
-                    schema=schema
-                )
-                
-                if correction_result.was_corrected:
-                    logger.info(f"Correction applied: {correction_result.correction_description}")
-                    cypher_query = correction_result.corrected_cypher
-                    logger.debug(f"Corrected Cypher: {cypher_query[:200]}{'...' if len(cypher_query) > 200 else ''}")
-                else:
-                    logger.warning("No correction could be applied, retrying with LLM regeneration")
-                    # If correction failed, try regenerating with error feedback
-                    try:
-                        cypher_query = self.llm_client.generate_cypher(
-                            user_query=user_query,
-                            schema=schema,
-                            few_shot_examples=few_shot_examples,
-                            error_feedback=error_feedback
-                        )
-                        logger.info(f"Regenerated Cypher: {cypher_query[:200]}{'...' if len(cypher_query) > 200 else ''}")
-                    except Exception as e:
-                        error_message = f"Failed to regenerate Cypher: {str(e)}"
-                        logger.error(error_message, exc_info=True)
-                        continue
-            
-            # STEP 2: Verify Cypher query
-            logger.info("Verifying Cypher query")
-            verification_result = self.verifier.verify(
-                cypher_query=cypher_query,
-                user_query=user_query,
-                verifier_types=self.verifier_types,
-                use_metadata=self.use_verification_metadata
-            )
-            
-            if not verification_result.is_valid:
-                logger.warning(f"Verification failed: {verification_result.error_message}")
-                error_feedback = verification_result.error_message
-                
-                # Store failed verification attempt
-                self.neo4j_client.store_cypher_attempt(
-                    query_id=query_id,
-                    cypher_text=cypher_query,
-                    attempt_number=iteration,
-                    success=False,
-                    error_message=f"Verification failed ({verification_result.verifier_type.value}): {verification_result.error_message}"
-                )
-                
-                # Continue to next iteration for correction
-                continue
-            
-            logger.info("Verification passed")
-            
-            # STEP 3: Execute Cypher query
-            logger.debug(f"Executing verified Cypher query (iteration {iteration})")
-            success, result_data, execution_error = self.neo4j_client.execute_cypher(cypher_query)
-            
-            # Store attempt
+        # Store the cypher attempt if we have one
+        if cypher_used or tool_used:
             cypher_attempt_id = self.neo4j_client.store_cypher_attempt(
                 query_id=query_id,
-                cypher_text=cypher_query,
-                attempt_number=iteration,
+                cypher_text=cypher_used or f"Tool: {tool_used}",
+                attempt_number=1,
                 success=success,
-                error_message=execution_error
+                error_message=error_message
             )
-            logger.debug(f"Stored Cypher attempt with ID: {cypher_attempt_id}")
             
-            if success:
-                logger.info(f"✓ Cypher execution successful (returned {len(result_data) if isinstance(result_data, list) else 1} records)")
-                
-                # Generate natural language summary
-                logger.debug("Generating natural language summary")
-                result_json = json.dumps(result_data, default=str)
-                summary = self.llm_client.generate_summary(user_query, result_json)
-                logger.debug(f"Summary generated: {summary[:100]}...")
-                
-                # Store response
+            # Store the response if successful
+            if success and raw_data:
                 self.neo4j_client.store_response(
                     cypher_attempt_id=cypher_attempt_id,
-                    result_data=result_data,
-                    summary=summary
+                    result_data=raw_data,
+                    summary=answer
                 )
-                logger.info(f"Query completed successfully after {iteration} iteration(s) (query_id: {query_id})")
-                
-                return BOOTHResponse(
-                    success=True,
-                    answer=summary,
-                    query_id=query_id,
-                    similar_match=similarity_matched,
-                    cypher_used=cypher_query,
-                    raw_data=result_data
-                )
-            else:
-                # Execution failed - prepare error feedback for next iteration
-                logger.warning(f"Cypher execution failed (iteration {iteration}): {execution_error}")
-                error_feedback = execution_error
         
-        # All iterations exhausted
-        logger.error(f"All {self.max_retries} iterations exhausted for query_id: {query_id}")
+        # Update query with tool used
+        self._update_query_tool_used(query_id, tool_used)
+        
+        logger.info(f"Agent completed (success={success}, tool={tool_used}, query_id={query_id})")
+        
         return BOOTHResponse(
-            success=False,
-            answer=f"Failed to generate a valid query after {self.max_retries} iterations with verification and correction. This has been logged for review.",
+            success=success,
+            answer=answer,
             query_id=query_id,
             similar_match=similarity_matched,
-            error_message=error_feedback
+            high_risk=is_high_risk,
+            declined=False,
+            cypher_used=cypher_used,
+            raw_data=raw_data,
+            error_message=error_message,
+            tool_used=tool_used,
+            pending_feedback=success and not is_high_risk  # Low-risk successful queries need feedback
         )
+    
+    def _update_query_tool_used(self, query_id: str, tool_used: str):
+        """Update a query with the tool that was used."""
+        try:
+            with self.neo4j_client.driver.session() as session:
+                session.run("""
+                    MATCH (q:Query {id: $query_id})
+                    SET q.tool_used = $tool_used
+                """, query_id=query_id, tool_used=tool_used)
+        except Exception as e:
+            logger.warning(f"Could not update query tool_used: {e}")
+    
+    def submit_user_feedback(
+        self,
+        query_id: str,
+        is_helpful: bool
+    ) -> bool:
+        """
+        Submit user feedback for a query response.
+        
+        For low-risk queries, user feedback determines whether the query
+        is stored for final approval (helpful) or logged for review (not helpful).
+        
+        Args:
+            query_id: The query ID to submit feedback for.
+            is_helpful: Whether the user found the response helpful.
+        
+        Returns:
+            True if feedback was recorded successfully.
+        """
+        logger.info(f"User feedback for query {query_id}: helpful={is_helpful}")
+        
+        try:
+            with self.neo4j_client.driver.session() as session:
+                if is_helpful:
+                    # Mark for final approval - curator will review
+                    session.run("""
+                        MATCH (q:Query {id: $query_id})
+                        SET q.status = 'pending_approval',
+                            q.user_feedback = 'helpful',
+                            q.feedback_timestamp = datetime()
+                    """, query_id=query_id)
+                    logger.info(f"Query {query_id} marked for final approval (user rated helpful)")
+                else:
+                    # Log for review - helps improve prompts/tools
+                    session.run("""
+                        MATCH (q:Query {id: $query_id})
+                        SET q.status = 'needs_review',
+                            q.user_feedback = 'not_helpful',
+                            q.feedback_timestamp = datetime()
+                    """, query_id=query_id)
+                    logger.info(f"Query {query_id} logged for review (user rated not helpful)")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to record user feedback: {e}", exc_info=True)
+            return False
     
     def get_pending_queries_for_curation(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get queries pending approval for human curation.
@@ -478,7 +807,7 @@ class BOOTHOrchestrator:
         return self.neo4j_client.get_pending_queries(limit)
     
     def approve_query(self, query_id: str, cypher_id: str):
-        """Approve a query for use as few-shot example.
+        """Approve a query for use as few-shot example (legacy method).
         
         Args:
             query_id: Query ID to approve.
@@ -487,6 +816,176 @@ class BOOTHOrchestrator:
         logger.info(f"Approving query {query_id} with cypher {cypher_id}")
         self.neo4j_client.approve_query(query_id, cypher_id)
         logger.info(f"Query {query_id} approved successfully")
+    
+    def approve_query_with_refinement(
+        self,
+        query_id: str,
+        cypher_id: str,
+        trigger_refinement: bool = True
+    ) -> Dict[str, Any]:
+        """Approve a query and optionally trigger the refinement agent.
+        
+        This is the v2 approval flow that creates parameterized templates.
+        
+        Args:
+            query_id: Query ID to approve
+            cypher_id: CypherAttempt ID with the successful result
+            trigger_refinement: Whether to run the refinement agent
+            
+        Returns:
+            Dict with refinement result information
+        """
+        logger.info(f"Approving query {query_id} with refinement")
+        
+        # First, mark the query as approved (legacy behavior for compatibility)
+        self.neo4j_client.approve_query(query_id, cypher_id)
+        
+        if not trigger_refinement:
+            return {"success": True, "refinement_skipped": True}
+        
+        # Get the query details for refinement
+        query_details = self._get_query_details_for_refinement(query_id, cypher_id)
+        if not query_details:
+            logger.warning(f"Could not get query details for refinement: {query_id}")
+            return {"success": False, "error": "Could not retrieve query details"}
+        
+        # Run the refinement agent
+        try:
+            from src.agents.refinement_agent import create_refinement_agent
+            
+            refinement_agent = create_refinement_agent(
+                neo4j_client=self.neo4j_client
+            )
+            
+            # Get existing categories and similar templates for context
+            existing_categories = self.neo4j_client.get_existing_categories()
+            
+            # Get embedding for the question
+            embedding = self.llm_client.get_embedding(query_details['question_text'])
+            similar_templates = self.neo4j_client.find_similar_templates(embedding, k=3, threshold=0.7)
+            
+            # Run refinement
+            result = refinement_agent.refine(
+                original_question=query_details['question_text'],
+                multi_step_queries=query_details['queries_executed'],
+                approved_answer=query_details['approved_answer'],
+                existing_categories=existing_categories,
+                similar_templates=similar_templates
+            )
+            
+            if result.success:
+                logger.info(f"Refinement successful for query {query_id}")
+                
+                # Create the template embedding from the parameterized template
+                template_embedding = self.llm_client.get_embedding(result.question_template)
+                
+                # Store the QueryTemplate
+                template_id = self.neo4j_client.store_query_template(
+                    template=result.question_template,
+                    category=result.category,
+                    embedding=template_embedding,
+                    parameters=result.parameters
+                )
+                
+                # Store the FewShotCypher
+                self.neo4j_client.store_few_shot_cypher(
+                    template_id=template_id,
+                    cypher_template=result.refined_cypher,
+                    parameters=result.parameters,
+                    refinement_attempts=result.attempts,
+                    source_question_id=query_id
+                )
+                
+                # Link the original question to the template
+                self.neo4j_client.link_question_to_template(
+                    question_id=query_id,
+                    template_id=template_id,
+                    similarity_score=1.0,
+                    is_instance=True
+                )
+                
+                return {
+                    "success": True,
+                    "template_id": template_id,
+                    "category": result.category,
+                    "refined_cypher": result.refined_cypher,
+                    "question_template": result.question_template,
+                    "parameters": result.parameters,
+                    "refinement_attempts": result.attempts
+                }
+            else:
+                logger.warning(f"Refinement failed for query {query_id}: {result.error}")
+                
+                # Mark as needing human support
+                self._mark_needs_human_support(query_id, result.error)
+                
+                return {
+                    "success": False,
+                    "needs_human_support": True,
+                    "error": result.error,
+                    "partial_cypher": result.refined_cypher
+                }
+                
+        except ImportError as e:
+            logger.error(f"Refinement agent not available: {e}")
+            return {"success": False, "error": "Refinement agent not available"}
+        except Exception as e:
+            logger.error(f"Refinement error: {e}", exc_info=True)
+            self._mark_needs_human_support(query_id, str(e))
+            return {"success": False, "error": str(e)}
+    
+    def _get_query_details_for_refinement(
+        self,
+        query_id: str,
+        cypher_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get query details needed for refinement."""
+        try:
+            with self.neo4j_client.driver.session() as session:
+                result = session.run("""
+                    MATCH (q:Query {id: $query_id})
+                    OPTIONAL MATCH (q)-[:GENERATED]->(c:CypherAttempt {id: $cypher_id})
+                    OPTIONAL MATCH (c)-[:PRODUCED]->(r:Response)
+                    RETURN q.text as question_text,
+                           r.result_data as result_data,
+                           r.summary as approved_answer
+                """, query_id=query_id, cypher_id=cypher_id)
+                
+                record = result.single()
+                if not record:
+                    return None
+                
+                # Parse the result_data to get queries_executed
+                result_data = record['result_data']
+                queries_executed = []
+                
+                if result_data:
+                    try:
+                        data = json.loads(result_data)
+                        queries_executed = data.get('queries_executed', [])
+                    except json.JSONDecodeError:
+                        pass
+                
+                return {
+                    'question_text': record['question_text'],
+                    'approved_answer': record['approved_answer'] or '',
+                    'queries_executed': queries_executed
+                }
+        except Exception as e:
+            logger.error(f"Error getting query details: {e}")
+            return None
+    
+    def _mark_needs_human_support(self, query_id: str, error: str):
+        """Mark a query as needing human support after refinement failure."""
+        try:
+            with self.neo4j_client.driver.session() as session:
+                session.run("""
+                    MATCH (q:Query {id: $query_id})
+                    SET q.status = 'needs_human_support',
+                        q.refinement_error = $error
+                """, query_id=query_id, error=error)
+        except Exception as e:
+            logger.error(f"Could not mark query as needs_human_support: {e}")
     
     def reject_query(self, query_id: str, reason: Optional[str] = None):
         """Reject a query.
@@ -503,4 +1002,3 @@ class BOOTHOrchestrator:
         """Close connections."""
         if self.neo4j_client:
             self.neo4j_client.close()
-

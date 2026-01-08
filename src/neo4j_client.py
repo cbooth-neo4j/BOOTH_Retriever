@@ -1,4 +1,13 @@
-"""Unified Neo4j client for vector search, storage, and query execution."""
+"""Unified Neo4j client for vector search, storage, and query execution.
+
+Updated data model (v2):
+- UserQuestion: Individual user questions with embeddings
+- QueryTemplate: Parameterized question patterns for matching
+- FewShotCypher: Approved parameterized Cypher queries
+- CypherAttempt/Response: Audit trail (existing)
+
+See docs/data_model.md for full schema documentation.
+"""
 
 import os
 import json
@@ -38,7 +47,12 @@ class Neo4jClient:
             raise ValueError("Neo4j password is required. Set NEO4J_PASSWORD environment variable.")
         
         logger.info(f"Connecting to Neo4j at {self.uri} as user {self.user}")
-        self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+        # Suppress noisy Neo4j warnings about non-existent properties (they're expected)
+        self.driver = GraphDatabase.driver(
+            self.uri, 
+            auth=(self.user, self.password),
+            notifications_min_severity="OFF"  # Suppress all notification warnings
+        )
         self.similarity_threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.90"))
         logger.info(f"Neo4jClient initialized (similarity_threshold={self.similarity_threshold})")
     
@@ -144,12 +158,18 @@ class Neo4jClient:
     ) -> List[Dict[str, Any]]:
         """Find similar approved queries using vector similarity search.
         
+        Returns Query nodes with their linked FewShot examples and Tool recommendations.
+        This is the main matching endpoint - new questions match against Query embeddings.
+        
         Args:
             embedding: Query embedding vector.
             k: Number of similar queries to return.
             
         Returns:
-            List of similar query dictionaries with scores.
+            List of similar query dictionaries with:
+            - id, text, score: Query info
+            - few_shot_cypher: Approved Cypher template (if exists)
+            - tool_name, tool_description: Recommended tool (if exists)
         """
         logger.debug(f"Searching for similar queries (k={k}, threshold={self.similarity_threshold})")
         with self.driver.session() as session:
@@ -158,10 +178,16 @@ class Neo4jClient:
                     CALL db.index.vector.queryNodes('query_embeddings', $k, $embedding)
                     YIELD node, score
                     WHERE node.status = 'approved' AND score >= $threshold
+                    OPTIONAL MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs)
+                    OPTIONAL MATCH (node)-[:USES_TOOL]->(tool:Tool)
                     RETURN node.id as id,
                            node.text as text,
                            node.timestamp as timestamp,
-                           score
+                           score,
+                           fs.cypher_template as few_shot_cypher,
+                           fs.parameters as few_shot_params,
+                           tool.name as tool_name,
+                           tool.description as tool_description
                     ORDER BY score DESC
                 """, k=k, embedding=embedding, threshold=self.similarity_threshold)
                 
@@ -236,6 +262,102 @@ class Neo4jClient:
         
         logger.info(f"Stored query with ID: {query_id}")
         return query_id
+    
+    def store_few_shot_for_query(
+        self,
+        query_id: str,
+        cypher_template: str,
+        parameters: Optional[List[str]] = None,
+        example_values: Optional[Dict[str, str]] = None
+    ) -> str:
+        """Store a FewShot example linked to a Query.
+        
+        This is the approved Cypher pattern that answers this type of question.
+        Can be parameterized (with $param syntax) or concrete.
+        
+        Args:
+            query_id: Query node ID to link to
+            cypher_template: The Cypher query (can include $params)
+            parameters: List of parameter names if parameterized
+            example_values: Example parameter values for documentation
+            
+        Returns:
+            Generated FewShot ID
+        """
+        few_shot_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        
+        logger.debug(f"Storing FewShot for query {query_id}")
+        with self.driver.session() as session:
+            session.run("""
+                MATCH (q:Query {id: $query_id})
+                CREATE (fs:FewShot {
+                    id: $id,
+                    cypher_template: $cypher_template,
+                    parameters: $param_list,
+                    example_values: $example_values,
+                    created_at: $created_at
+                })
+                CREATE (q)-[:FEW_SHOT_EXAMPLE]->(fs)
+            """, {
+                "query_id": query_id,
+                "id": few_shot_id,
+                "cypher_template": cypher_template,
+                "param_list": parameters or [],
+                "example_values": json.dumps(example_values) if example_values else None,
+                "created_at": timestamp
+            })
+        
+        logger.info(f"Stored FewShot with ID: {few_shot_id}")
+        return few_shot_id
+    
+    def get_or_create_tool(
+        self,
+        name: str,
+        description: Optional[str] = None
+    ) -> str:
+        """Get or create a Tool node.
+        
+        Tools represent the retrieval methods (agentic_text2cypher, hybrid_retriever, etc.)
+        
+        Args:
+            name: Tool name (e.g., 'agentic_text2cypher')
+            description: Tool description
+            
+        Returns:
+            Tool node ID
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MERGE (t:Tool {name: $name})
+                ON CREATE SET t.id = $id, t.description = $description
+                RETURN t.id as id
+            """, name=name, id=str(uuid.uuid4()), description=description)
+            
+            record = result.single()
+            return record['id']
+    
+    def link_query_to_tool(
+        self,
+        query_id: str,
+        tool_name: str,
+        is_recommended: bool = True
+    ):
+        """Link a Query to a Tool via USES_TOOL relationship.
+        
+        Args:
+            query_id: Query node ID
+            tool_name: Tool name to link to
+            is_recommended: Whether this is the recommended tool for this query type
+        """
+        logger.debug(f"Linking query {query_id} to tool {tool_name}")
+        with self.driver.session() as session:
+            session.run("""
+                MATCH (q:Query {id: $query_id})
+                MATCH (t:Tool {name: $tool_name})
+                MERGE (q)-[r:USES_TOOL]->(t)
+                SET r.recommended = $is_recommended
+            """, query_id=query_id, tool_name=tool_name, is_recommended=is_recommended)
     
     def store_cypher_attempt(
         self, 
@@ -372,7 +494,7 @@ class Neo4jClient:
         with self.driver.session() as session:
             result = session.run("""
                 MATCH (q:Query)
-                WHERE q.status IN ['pending_approval', 'declined', 'rejected']
+                WHERE q.status IN ['pending_approval', 'declined', 'rejected', 'needs_review', 'needs_human_support']
                 OPTIONAL MATCH (q)-[:GENERATED]->(c:CypherAttempt)
                 WHERE c.success = true
                 OPTIONAL MATCH (c)-[:PRODUCED]->(r:Response)
@@ -381,8 +503,15 @@ class Neo4jClient:
                        q.timestamp as timestamp,
                        q.status as status,
                        q.risk_level as risk_level,
+                       q.user_feedback as user_feedback,
+                       q.refinement_error as refinement_error,
                        c.id as cypher_id,
                        c.cypher_text as cypher_text,
+                       c.refined_cypher as refined_cypher,
+                       c.question_template as question_template,
+                       c.category as category,
+                       c.parameters as parameters,
+                       c.refinement_success as refinement_success,
                        r.result_data as result_data,
                        r.summary as summary
                 ORDER BY q.timestamp DESC
@@ -447,4 +576,488 @@ class Neo4jClient:
                 MATCH (q:Query {id: $query_id})
                 SET q.status = 'declined', q.risk_level = 'high'
             """, query_id=query_id)
+
+    # =========================================================================
+    # NEW DATA MODEL (v2) - UserQuestion, QueryTemplate, FewShotCypher
+    # =========================================================================
+    
+    def ensure_template_indexes(self):
+        """Create vector indexes for the new data model if they don't exist."""
+        logger.info("Ensuring template indexes exist")
+        with self.driver.session() as session:
+            # Vector index for QueryTemplate matching
+            try:
+                session.run("""
+                    CREATE VECTOR INDEX query_template_embeddings IF NOT EXISTS
+                    FOR (qt:QueryTemplate) ON (qt.embedding)
+                    OPTIONS {indexConfig: {
+                        `vector.dimensions`: 1536,
+                        `vector.similarity_function`: 'cosine'
+                    }}
+                """)
+                logger.debug("QueryTemplate vector index ensured")
+            except Exception as e:
+                logger.warning(f"Could not create QueryTemplate index: {e}")
+            
+            # Vector index for UserQuestion (fallback)
+            try:
+                session.run("""
+                    CREATE VECTOR INDEX user_question_embeddings IF NOT EXISTS
+                    FOR (uq:UserQuestion) ON (uq.embedding)
+                    OPTIONS {indexConfig: {
+                        `vector.dimensions`: 1536,
+                        `vector.similarity_function`: 'cosine'
+                    }}
+                """)
+                logger.debug("UserQuestion vector index ensured")
+            except Exception as e:
+                logger.warning(f"Could not create UserQuestion index: {e}")
+            
+            # Regular indexes
+            try:
+                session.run("""
+                    CREATE INDEX user_question_status IF NOT EXISTS
+                    FOR (uq:UserQuestion) ON (uq.status)
+                """)
+                session.run("""
+                    CREATE INDEX query_template_category IF NOT EXISTS
+                    FOR (qt:QueryTemplate) ON (qt.category)
+                """)
+                logger.debug("Regular indexes ensured")
+            except Exception as e:
+                logger.warning(f"Could not create regular indexes: {e}")
+    
+    def store_user_question(
+        self,
+        text: str,
+        risk_level: str = "low",
+        matched_query_id: Optional[str] = None,
+        similarity_score: Optional[float] = None
+    ) -> str:
+        """Store a new user question (verbatim, for audit trail).
+        
+        UserQuestions are lightweight - just the verbatim text and timestamp.
+        They link to Query nodes via SIMILAR relationship for clustering.
+        
+        Args:
+            text: Original question text (verbatim)
+            risk_level: Risk level (low, high)
+            matched_query_id: If matched to existing Query, link via SIMILAR
+            similarity_score: Similarity score for the SIMILAR relationship
+            
+        Returns:
+            Generated UserQuestion ID
+        """
+        question_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        
+        logger.debug(f"Storing UserQuestion (risk_level={risk_level}, matched={matched_query_id is not None})")
+        with self.driver.session() as session:
+            # Create the UserQuestion node
+            session.run("""
+                CREATE (uq:UserQuestion {
+                    id: $id,
+                    text: $text,
+                    timestamp: $timestamp,
+                    risk_level: $risk_level
+                })
+            """, id=question_id, text=text, timestamp=timestamp, risk_level=risk_level)
+            
+            # If matched to a Query, create SIMILAR relationship
+            if matched_query_id and similarity_score:
+                session.run("""
+                    MATCH (uq:UserQuestion {id: $uq_id})
+                    MATCH (q:Query {id: $q_id})
+                    CREATE (uq)-[:SIMILAR {score: $score}]->(q)
+                """, uq_id=question_id, q_id=matched_query_id, score=similarity_score)
+                logger.debug(f"Linked UserQuestion to Query {matched_query_id} (score={similarity_score:.4f})")
+        
+        logger.info(f"Stored UserQuestion with ID: {question_id}")
+        return question_id
+    
+    def store_query_template(
+        self,
+        template: str,
+        category: str,
+        embedding: List[float],
+        parameters: List[str],
+        status: str = "approved"
+    ) -> str:
+        """Store a new query template.
+        
+        Args:
+            template: Parameterized question template
+            category: Question category
+            embedding: Vector embedding of template
+            parameters: List of parameter names
+            status: Template status (approved, pending_approval)
+            
+        Returns:
+            Generated QueryTemplate ID
+        """
+        template_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        
+        logger.debug(f"Storing QueryTemplate (category={category}, status={status})")
+        with self.driver.session() as session:
+            # Note: use 'params' dict to avoid conflict with neo4j's 'parameters' kwarg
+            session.run("""
+                CREATE (qt:QueryTemplate {
+                    id: $id,
+                    template: $template,
+                    category: $category,
+                    embedding: $embedding,
+                    parameters: $param_list,
+                    status: $status,
+                    created_at: $created_at,
+                    example_count: 1
+                })
+            """, {
+                "id": template_id,
+                "template": template,
+                "category": category,
+                "embedding": embedding,
+                "param_list": parameters,
+                "status": status,
+                "created_at": timestamp
+            })
+        
+        logger.info(f"Stored QueryTemplate with ID: {template_id} (status={status})")
+        return template_id
+    
+    def store_few_shot_cypher(
+        self,
+        template_id: str,
+        cypher_template: str,
+        parameters: List[str],
+        refinement_attempts: int = 1,
+        source_question_id: Optional[str] = None
+    ) -> str:
+        """Store a few-shot Cypher template and link to QueryTemplate.
+        
+        Args:
+            template_id: ID of the QueryTemplate to link to
+            cypher_template: Parameterized Cypher query
+            parameters: List of parameter names used
+            refinement_attempts: How many attempts the agent took
+            source_question_id: ID of UserQuestion that generated this
+            
+        Returns:
+            Generated FewShotCypher ID
+        """
+        cypher_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        
+        logger.debug(f"Storing FewShotCypher for template {template_id}")
+        with self.driver.session() as session:
+            # Create FewShotCypher and link to QueryTemplate
+            # Note: use dict to avoid conflict with neo4j's 'parameters' kwarg
+            session.run("""
+                MATCH (qt:QueryTemplate {id: $template_id})
+                CREATE (fs:FewShotCypher {
+                    id: $id,
+                    cypher_template: $cypher_template,
+                    parameters: $param_list,
+                    refinement_attempts: $refinement_attempts,
+                    verified: true,
+                    created_at: $created_at
+                })
+                CREATE (qt)-[:FEW_SHOT_EXAMPLE]->(fs)
+            """, {
+                "template_id": template_id,
+                "id": cypher_id,
+                "cypher_template": cypher_template,
+                "param_list": parameters,
+                "refinement_attempts": refinement_attempts,
+                "created_at": timestamp
+            })
+            
+            # If source question provided, link it
+            if source_question_id:
+                session.run("""
+                    MATCH (fs:FewShotCypher {id: $cypher_id})
+                    MATCH (uq:UserQuestion {id: $question_id})
+                    CREATE (fs)-[:REFINED_FROM]->(uq)
+                """, cypher_id=cypher_id, question_id=source_question_id)
+        
+        logger.info(f"Stored FewShotCypher with ID: {cypher_id}")
+        return cypher_id
+    
+    def find_similar_templates(
+        self,
+        embedding: List[float],
+        k: int = 5,
+        threshold: float = None
+    ) -> List[Dict[str, Any]]:
+        """Find similar QueryTemplates using vector similarity search.
+        
+        Args:
+            embedding: Query embedding vector
+            k: Number of similar templates to return
+            threshold: Similarity threshold (uses default if not provided)
+            
+        Returns:
+            List of similar template dictionaries with scores
+        """
+        threshold = threshold or self.similarity_threshold
+        logger.debug(f"Searching for similar templates (k={k}, threshold={threshold})")
+        
+        with self.driver.session() as session:
+            try:
+                result = session.run("""
+                    CALL db.index.vector.queryNodes('query_template_embeddings', $k, $embedding)
+                    YIELD node, score
+                    WHERE score >= $threshold AND node.status = 'approved'
+                    OPTIONAL MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs:FewShotCypher)
+                    RETURN node.id as id,
+                           node.template as template,
+                           node.category as category,
+                           node.parameters as parameters,
+                           fs.cypher_template as cypher_template,
+                           fs.parameters as cypher_parameters,
+                           score
+                    ORDER BY score DESC
+                """, k=k, embedding=embedding, threshold=threshold)
+                
+                templates = [dict(record) for record in result]
+                logger.info(f"Found {len(templates)} similar approved templates")
+                if templates:
+                    logger.debug(f"Top match score: {templates[0]['score']:.4f}")
+                return templates
+            except Exception as e:
+                logger.warning(f"Template vector search failed: {e}")
+                return []
+    
+    def get_existing_categories(self) -> List[str]:
+        """Get list of existing question categories.
+        
+        Returns:
+            List of category names in use
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (qt:QueryTemplate)
+                WHERE qt.category IS NOT NULL
+                RETURN DISTINCT qt.category as category
+                ORDER BY category
+            """)
+            return [record['category'] for record in result]
+    
+    def link_question_to_template(
+        self,
+        question_id: str,
+        template_id: str,
+        similarity_score: float,
+        is_instance: bool = False
+    ):
+        """Link a UserQuestion to a QueryTemplate.
+        
+        Args:
+            question_id: UserQuestion ID
+            template_id: QueryTemplate ID
+            similarity_score: Similarity score
+            is_instance: Whether this question is an approved instance of the template
+        """
+        logger.debug(f"Linking question {question_id} to template {template_id}")
+        with self.driver.session() as session:
+            # Create SIMILAR relationship
+            session.run("""
+                MATCH (uq:UserQuestion {id: $question_id})
+                MATCH (qt:QueryTemplate {id: $template_id})
+                MERGE (uq)-[r:SIMILAR]->(qt)
+                SET r.score = $score
+            """, question_id=question_id, template_id=template_id, score=similarity_score)
+            
+            # If approved, also create INSTANCE_OF and update counter
+            if is_instance:
+                session.run("""
+                    MATCH (uq:UserQuestion {id: $question_id})
+                    MATCH (qt:QueryTemplate {id: $template_id})
+                    MERGE (uq)-[:INSTANCE_OF]->(qt)
+                    SET qt.example_count = coalesce(qt.example_count, 0) + 1
+                """, question_id=question_id, template_id=template_id)
+    
+    def update_user_question_status(
+        self,
+        question_id: str,
+        status: str,
+        extracted_params: Optional[Dict[str, str]] = None
+    ):
+        """Update status of a UserQuestion.
+        
+        Args:
+            question_id: UserQuestion ID
+            status: New status
+            extracted_params: Optional extracted parameters
+        """
+        logger.debug(f"Updating UserQuestion {question_id} status to {status}")
+        with self.driver.session() as session:
+            if extracted_params:
+                params_json = json.dumps(extracted_params)
+                session.run("""
+                    MATCH (uq:UserQuestion {id: $question_id})
+                    SET uq.status = $status, uq.extracted_params = $params_json
+                """, question_id=question_id, status=status, params_json=params_json)
+            else:
+                session.run("""
+                    MATCH (uq:UserQuestion {id: $question_id})
+                    SET uq.status = $status
+                """, question_id=question_id, status=status)
+    
+    def get_pending_user_questions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get UserQuestions pending approval.
+        
+        Args:
+            limit: Maximum number to return
+            
+        Returns:
+            List of pending questions with their agentic results
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (uq:UserQuestion)
+                WHERE uq.status IN ['pending', 'needs_human_support']
+                OPTIONAL MATCH (uq)-[:GENERATED]->(c:CypherAttempt)
+                WHERE c.success = true
+                OPTIONAL MATCH (c)-[:PRODUCED]->(r:Response)
+                RETURN uq.id as question_id,
+                       uq.text as question_text,
+                       uq.timestamp as timestamp,
+                       uq.status as status,
+                       uq.risk_level as risk_level,
+                       c.id as cypher_id,
+                       c.cypher_text as cypher_text,
+                       r.result_data as result_data,
+                       r.summary as summary
+                ORDER BY uq.timestamp DESC
+                LIMIT $limit
+            """, limit=limit)
+            
+            return [dict(record) for record in result]
+    
+    def get_questions_needing_human_support(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get questions where refinement failed and needs human intervention.
+        
+        Args:
+            limit: Maximum number to return
+            
+        Returns:
+            List of questions needing human support
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (uq:UserQuestion)
+                WHERE uq.status = 'needs_human_support'
+                OPTIONAL MATCH (uq)-[:GENERATED]->(c:CypherAttempt)
+                WHERE c.success = true
+                OPTIONAL MATCH (c)-[:PRODUCED]->(r:Response)
+                RETURN uq.id as question_id,
+                       uq.text as question_text,
+                       uq.timestamp as timestamp,
+                       uq.risk_level as risk_level,
+                       uq.refinement_error as refinement_error,
+                       c.cypher_text as cypher_text,
+                       r.result_data as result_data,
+                       r.summary as summary
+                ORDER BY uq.timestamp DESC
+                LIMIT $limit
+            """, limit=limit)
+            
+            return [dict(record) for record in result]
+    
+    def find_similar_template_for_new_question(
+        self,
+        embedding: List[float]
+    ) -> Optional[Dict[str, Any]]:
+        """Find the best matching template for a new question.
+        
+        This is the main entry point for the "instant execution" flow.
+        
+        Args:
+            embedding: Question embedding
+            
+        Returns:
+            Best matching template with cypher, or None if no match above threshold
+        """
+        templates = self.find_similar_templates(embedding, k=1)
+        if templates:
+            return templates[0]
+        return None
+    
+    # ===========================================
+    # Development/Testing Cleanup Methods
+    # ===========================================
+    
+    def delete_all_rejected_queries(self) -> int:
+        """Delete all rejected queries and their related nodes.
+        
+        Returns:
+            Number of Query nodes deleted
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (q:Query {status: 'rejected'})
+                OPTIONAL MATCH (q)-[:GENERATED]->(ca:CypherAttempt)
+                OPTIONAL MATCH (ca)-[:PRODUCED]->(r:Response)
+                OPTIONAL MATCH (uq:UserQuestion)-[:SIMILAR]->(q)
+                OPTIONAL MATCH (q)-[:FEW_SHOT_EXAMPLE]->(fs:FewShot)
+                WITH q, collect(DISTINCT ca) as attempts, collect(DISTINCT r) as responses, 
+                     collect(DISTINCT uq) as questions, collect(DISTINCT fs) as fewshots
+                DETACH DELETE q
+                FOREACH (ca IN attempts | DETACH DELETE ca)
+                FOREACH (r IN responses | DETACH DELETE r)
+                FOREACH (uq IN questions | DETACH DELETE uq)
+                FOREACH (fs IN fewshots | DETACH DELETE fs)
+                RETURN count(q) as deleted_count
+            """)
+            record = result.single()
+            return record["deleted_count"] if record else 0
+    
+    def delete_all_booth_data(self) -> Dict[str, int]:
+        """Delete all BOOTH-related nodes (UserQuestion, Query, FewShot, Tool, CypherAttempt, Response).
+        
+        This does NOT delete the entire database - only nodes defined in the BOOTH data model.
+        
+        Returns:
+            Dictionary with counts of deleted nodes by type
+        """
+        deleted_counts = {}
+        
+        with self.driver.session() as session:
+            # Delete in order to handle relationships properly
+            # First delete leaf nodes, then work up
+            
+            # Response nodes
+            result = session.run("MATCH (r:Response) DETACH DELETE r RETURN count(r) as count")
+            deleted_counts['Response'] = result.single()["count"]
+            
+            # CypherAttempt nodes
+            result = session.run("MATCH (ca:CypherAttempt) DETACH DELETE ca RETURN count(ca) as count")
+            deleted_counts['CypherAttempt'] = result.single()["count"]
+            
+            # FewShot nodes (v3 model)
+            result = session.run("MATCH (fs:FewShot) DETACH DELETE fs RETURN count(fs) as count")
+            deleted_counts['FewShot'] = result.single()["count"]
+            
+            # FewShotCypher nodes (v2 legacy)
+            result = session.run("MATCH (fsc:FewShotCypher) DETACH DELETE fsc RETURN count(fsc) as count")
+            deleted_counts['FewShotCypher'] = result.single()["count"]
+            
+            # QueryTemplate nodes (v2 legacy)
+            result = session.run("MATCH (qt:QueryTemplate) DETACH DELETE qt RETURN count(qt) as count")
+            deleted_counts['QueryTemplate'] = result.single()["count"]
+            
+            # UserQuestion nodes
+            result = session.run("MATCH (uq:UserQuestion) DETACH DELETE uq RETURN count(uq) as count")
+            deleted_counts['UserQuestion'] = result.single()["count"]
+            
+            # Query nodes
+            result = session.run("MATCH (q:Query) DETACH DELETE q RETURN count(q) as count")
+            deleted_counts['Query'] = result.single()["count"]
+            
+            # Tool nodes
+            result = session.run("MATCH (t:Tool) DETACH DELETE t RETURN count(t) as count")
+            deleted_counts['Tool'] = result.single()["count"]
+        
+        return deleted_counts
 

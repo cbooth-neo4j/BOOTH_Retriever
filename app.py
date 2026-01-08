@@ -35,47 +35,50 @@ if 'query_history' not in st.session_state:
     st.session_state.query_history = []
     logger.debug("Initialized query history")
 
+if 'pending_feedback' not in st.session_state:
+    st.session_state.pending_feedback = {}  # {query_id: response}
+    logger.debug("Initialized pending feedback tracker")
+
+
+def submit_feedback(query_id: str, is_helpful: bool):
+    """Submit user feedback for a query."""
+    # Check if orchestrator has the new feedback method
+    if not hasattr(st.session_state.orchestrator, 'submit_user_feedback'):
+        logger.warning("Orchestrator doesn't support user feedback - please restart the app")
+        return False
+    
+    success = st.session_state.orchestrator.submit_user_feedback(query_id, is_helpful)
+    if success:
+        # Remove from pending feedback
+        if query_id in st.session_state.pending_feedback:
+            del st.session_state.pending_feedback[query_id]
+        return True
+    return False
+
 # Header
 st.title("🔍 BOOTH Retriever")
 st.markdown("""
-**Bounded Orchestration Of Text Handling**
+**(Bounded Orchestration Of Text Handling)**
 
-Ask questions about your Neo4j database in natural language.
+**Examples:**
 
-**Example Questions:**
-
-- **Easy:** What is NovaGrid Energy Corporation's annual revenue and how many employees does the company have?
-- **Hard:** Across all three RFPs, list the top five digital capabilities the companies demand and explain why those capabilities matter to their industries.
+- **Easy:** What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?
+- **Hard:** Are the Laleli Mosque and Esma Sultan Mansion located in the same neighborhood?
+- **Approved:** Which performance act has a higher instrument to person ratio, Badly Drawn Boy or Wolf Alice?
 """)
 
 # Sidebar with info
 with st.sidebar:
-    st.header("About BOOTH")
-    st.markdown("""
-    BOOTH intelligently handles your queries:
-    
-    1. **Similarity Check**: Searches for similar past queries (>90% match)
-    2. **Risk Assessment**: You mark queries as safe or high-risk
-       - High-risk: Results hidden from user, but full pipeline runs for review
-    3. **Text-to-Cypher**: Converts natural language to Cypher queries
-    4. **Human Curation**: All queries (including declined) can be reviewed
-    
-    ---
-    
-    ### Configuration
-    """)
     
     threshold = float(os.getenv("SIMILARITY_THRESHOLD", "0.90"))
     st.metric("Similarity Threshold", f"{threshold*100:.0f}%")
     
-    max_retries = int(os.getenv("MAX_CYPHER_RETRIES", "3"))
-    st.metric("Max Cypher Retries", max_retries)
+    model = os.getenv("AGENTIC_TEXT2CYPHER_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"))
+    st.metric("Agent Model", model)
     
     st.markdown("---")
-    st.markdown("Go to **Train AI** page to approve pending queries.")
 
 # Main query interface
-st.header("Ask a Question")
 
 # Query input
 user_query = st.text_area(
@@ -126,12 +129,23 @@ if submit_button and user_query.strip():
                 if response.query_id:
                     st.info(f"Query ID: `{response.query_id}` - Review in Train AI page to see what the system attempted")
             elif response.success:
-                logger.info(f"Query successful (query_id: {response.query_id}, similar_match: {response.similar_match})")
+                # Use getattr for backward compatibility with old response objects
+                tool_used = getattr(response, 'tool_used', None)
+                logger.info(f"Query successful (query_id: {response.query_id}, similar_match: {response.similar_match}, tool_used: {tool_used})")
                 st.success("✅ Query Successful")
                 
                 # Show if similarity match was used
                 if response.similar_match:
                     st.info("💡 Found similar query in database - using optimized approach")
+                
+                # Show which tool was used
+                if tool_used:
+                    tool_display = {
+                        "hybrid_retriever": "🔍 Hybrid Retriever (vector + keyword search)",
+                        "text2cypher": "⚡ Text2Cypher (natural language to Cypher)",
+                        "agentic_text2cypher": "🤖 Agentic Text2Cypher (Deep Agent)"
+                    }.get(tool_used, f"🔧 {tool_used}")
+                    st.caption(f"Tool used: {tool_display}")
                 
                 # Display answer
                 st.markdown("### Answer")
@@ -149,6 +163,34 @@ if submit_button and user_query.strip():
                     
                     st.markdown(f"**Query ID:** `{response.query_id}`")
                     st.info("This query is pending approval. Go to the Train AI page to review it.")
+                
+                # User feedback section (for low-risk queries)
+                pending_feedback = getattr(response, 'pending_feedback', False)
+                if pending_feedback and response.query_id:
+                    st.markdown("---")
+                    st.markdown("### 📝 Was this response accurate?")
+                    st.caption("Your feedback helps improve BOOTH's responses and trains the system.")
+                    
+                    # Store response for feedback tracking
+                    st.session_state.pending_feedback[response.query_id] = response
+                    
+                    feedback_col1, feedback_col2, feedback_col3 = st.columns([1, 1, 2])
+                    
+                    with feedback_col1:
+                        if st.button("👍 Helpful", key=f"helpful_{response.query_id}", type="primary"):
+                            if submit_feedback(response.query_id, True):
+                                st.success("Thank you! This query has been marked for final approval.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to record feedback. Please try again.")
+                    
+                    with feedback_col2:
+                        if st.button("👎 Not Helpful", key=f"not_helpful_{response.query_id}"):
+                            if submit_feedback(response.query_id, False):
+                                st.info("Thank you for your feedback. This will help us improve.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to record feedback. Please try again.")
             else:
                 logger.warning(f"Query failed (query_id: {response.query_id}): {response.error_message}")
                 st.error("❌ Query Failed")
@@ -190,7 +232,7 @@ if st.session_state.query_history:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
-    <small>BOOTH Retriever v0.1.0 | Powered by OpenAI & Neo4j</small>
+    <small>BOOTH Retriever v0.3.0 | Powered by OpenAI, Neo4j & Deep Agents</small>
 </div>
 """, unsafe_allow_html=True)
 
