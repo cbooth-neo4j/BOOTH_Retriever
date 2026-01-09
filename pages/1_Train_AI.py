@@ -82,17 +82,12 @@ else:
     st.header(f"Query store")
     
     # Group queries by status and success
-    # User-validated: ONLY queries where user gave helpful feedback (thumbs up)
-    user_validated_queries = [q for q in pending_queries 
-                              if q.get('user_feedback') == 'helpful']
     pending_successful = [q for q in pending_queries 
                          if q.get('status') == 'pending_approval' 
-                         and q.get('summary') 
-                         and q.get('user_feedback') != 'helpful']
+                         and q.get('summary')]
     pending_failed = [q for q in pending_queries 
                      if q.get('status') == 'pending_approval' 
-                     and not q.get('summary')
-                     and q.get('user_feedback') != 'helpful']
+                     and not q.get('summary')]
     # Declined includes ALL high-risk declined queries (with or without successful AI attempt)
     declined_queries = [q for q in pending_queries 
                        if q.get('status') == 'declined']
@@ -103,7 +98,6 @@ else:
     
     # Tab definitions for tooltips
     tab_definitions = {
-        "user_validated": "Queries validated by users (👍 thumbed up). These are high-priority candidates for approval since a real user confirmed the answer was helpful.",
         "pending_approval": "Queries that executed successfully but haven't been validated by users yet. Review the Cypher and results before approving as few-shot examples.",
         "approved": "Queries that have been approved and are now being used as few-shot examples for similar future queries.",
         "failed": "Queries that failed to produce results. Review to understand why and reject or debug.",
@@ -114,8 +108,7 @@ else:
     }
     
     # Tabs for different statuses
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        f"👤 User Validated ({len(user_validated_queries)})",
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         f"⏳ Pending Approval ({len(pending_successful)})",
         f"✅ Approved ({len(approved_queries)})", 
         f"❌ Failed ({len(pending_failed)})",
@@ -126,125 +119,6 @@ else:
     ])
     
     with tab0:
-        st.caption(f"ℹ️ {tab_definitions['user_validated']}")
-        st.markdown("---")
-        
-        if not user_validated_queries:
-            st.info("No user-validated queries pending approval.")
-            st.markdown("""
-            Queries appear here when a user clicks 👍 **Helpful** on the app page.
-            
-           
-            """)
-        else:
-            for idx, query in enumerate(user_validated_queries):
-                with st.expander(
-                    f"👍 Query {idx + 1}: {query['query_text'][:80]}...",
-                    expanded=(idx == 0)
-                ):
-                    # Source badge
-                    st.success("👍 **User marked this response as helpful**")
-                    
-                    # Query details
-                    st.markdown("### 📝 Query")
-                    st.info(query['query_text'])
-                    
-                    # Timestamp
-                    timestamp = query.get('timestamp', 'N/A')
-                    st.caption(f"Submitted: {timestamp}")
-                    
-                    # Cypher query
-                    st.markdown("### 🔧 Generated Cypher")
-                    st.code(query['cypher_text'], language="cypher")
-                    
-                    # Results
-                    st.markdown("### 📊 Results")
-                    
-                    st.markdown("**Summary:**")
-                    st.success(query['summary'])
-                    
-                    # Show original cypher with multi-step queries and raw data
-                    if query.get('result_data'):
-                        with st.expander("🔧 View Original Cypher"):
-                            st.markdown("**Last Query Executed:**")
-                            st.code(query['cypher_text'], language="cypher")
-                            
-                            try:
-                                data = json.loads(query['result_data'])
-                                queries_executed = data.get('queries_executed', [])
-                                
-                                if queries_executed:
-                                    st.markdown("**Multi-Step Queries Executed:**")
-                                    for i, q in enumerate(queries_executed):
-                                        st.markdown(f"**Query {i}:**")
-                                        st.code(q, language="cypher")
-                                
-                                st.markdown("**Raw Data:**")
-                                st.json(data)
-                            except:
-                                st.markdown("**Raw Data:**")
-                                st.text(query['result_data'])
-                    
-                    # Action buttons
-                    st.markdown("---")
-                    col1, col2, col3 = st.columns([1, 1, 3])
-                    
-                    with col1:
-                        if st.button(
-                            "✅ Approve & Refine",
-                            key=f"approve_validated_{idx}_{query['query_id']}",
-                            type="primary",
-                            use_container_width=True
-                        ):
-                            try:
-                                logger.info(f"User approving validated query with refinement: {query['query_id']}")
-                                with st.spinner("🔄 Running refinement agent to create parameterized template..."):
-                                    result = st.session_state.orchestrator.approve_query_with_refinement(
-                                        query['query_id'],
-                                        query['cypher_id'],
-                                        trigger_refinement=True
-                                    )
-                                
-                                if result.get('success'):
-                                    logger.info(f"Validated query {query['query_id']} approved with refinement")
-                                    st.success("✅ Query approved and template created!")
-                                    if result.get('refined_cypher'):
-                                        st.code(result['refined_cypher'], language="cypher")
-                                    st.rerun()
-                                elif result.get('needs_human_support'):
-                                    logger.warning(f"Refinement failed for query {query['query_id']}")
-                                    st.warning(f"⚠️ Refinement failed: {result.get('error')}")
-                                    st.info("Query marked as 'needs_human_support'. You can manually create a template.")
-                                    st.rerun()
-                                else:
-                                    st.error(f"Approval failed: {result.get('error')}")
-                            except Exception as e:
-                                logger.error(f"Failed to approve query {query['query_id']}: {str(e)}", exc_info=True)
-                                st.error(f"Failed to approve: {str(e)}")
-                    
-                    with col2:
-                        if st.button(
-                            "❌ Reject",
-                            key=f"reject_validated_{idx}_{query['query_id']}",
-                            use_container_width=True
-                        ):
-                            try:
-                                reason = "Rejected during curation despite user validation"
-                                logger.info(f"User rejecting validated query: {query['query_id']} (reason: {reason})")
-                                st.session_state.orchestrator.reject_query(
-                                    query['query_id'],
-                                    reason
-                                )
-                                logger.info(f"Validated query {query['query_id']} rejected")
-                                st.warning("Query rejected.")
-                                st.rerun()
-                            except Exception as e:
-                                logger.error(f"Failed to reject query {query['query_id']}: {str(e)}", exc_info=True)
-                                st.error(f"Failed to reject: {str(e)}")
-                    
-                    st.markdown(f"**Query ID:** `{query['query_id']}`")
-    
-    with tab1:
         st.caption(f"ℹ️ {tab_definitions['pending_approval']}")
         st.markdown("---")
         
@@ -342,7 +216,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab2:
+    with tab1:
         st.caption(f"ℹ️ {tab_definitions['approved']}")
         st.markdown("---")
         
@@ -434,7 +308,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab3:
+    with tab2:
         st.caption(f"ℹ️ {tab_definitions['failed']}")
         st.markdown("---")
         
@@ -487,7 +361,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab4:
+    with tab3:
         st.caption(f"ℹ️ {tab_definitions['declined']}")
         st.markdown("---")
         
@@ -654,7 +528,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab5:
+    with tab4:
         st.caption(f"ℹ️ {tab_definitions['rejected']}")
         st.markdown("---")
         
@@ -713,7 +587,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab6:
+    with tab5:
         st.caption(f"ℹ️ {tab_definitions['needs_review']}")
         st.markdown("---")
         
@@ -796,7 +670,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab7:
+    with tab6:
         st.caption(f"ℹ️ {tab_definitions['needs_human_support']}")
         st.markdown("---")
         
@@ -1026,8 +900,6 @@ with st.sidebar:
     st.header("Training Guidelines")
     st.markdown("""
     ### Tab Definitions
-    
-    **👤 User Validated** - High-priority! Queries users marked as helpful OR declined queries where AI succeeded.
     
     **⏳ Pending Approval** - AI generated results but no user feedback yet. Ready for curator review.
     
