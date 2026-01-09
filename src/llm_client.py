@@ -77,26 +77,31 @@ class LLMClient:
     def chat_completion(
         self, 
         messages: List[dict], 
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None
     ) -> str:
         """Get a chat completion from the LLM.
         
         Args:
             messages: List of message dicts with 'role' and 'content' keys.
-            max_tokens: Maximum tokens in response.
+            max_tokens: Maximum tokens in response (will be converted to max_completion_tokens for newer models).
+            temperature: Sampling temperature (0.0-2.0). If None, uses model default.
             
         Returns:
             The assistant's response text.
         """
         logger.debug(f"Requesting chat completion ({len(messages)} messages)")
         try:
-            # Build kwargs, only including max_tokens if it's not None
+            # Build kwargs, only including parameters if they're not None
+            # Newer OpenAI models use max_completion_tokens instead of max_tokens
             kwargs = {
                 "model": self.chat_model,
                 "messages": messages,
             }
             if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
+                kwargs["max_completion_tokens"] = max_tokens
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             
             response = self.client.chat.completions.create(**kwargs)
             result = response.choices[0].message.content

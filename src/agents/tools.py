@@ -328,10 +328,12 @@ def neo4j_read_cypher(query: str, params: dict = None) -> str:
     import re
     param_matches = re.findall(r'\$(\w+)', query)
     if param_matches and not params:
+        unique_params = list(dict.fromkeys(param_matches))  # Preserve order, remove duplicates
         return (
-            f"ERROR: Query contains parameters {param_matches} but no params dict was provided. "
-            f"You must pass actual values to test parameterized queries. "
-            f"Example: neo4j_read_cypher(query, {{{', '.join(f'\"{p}\": \"actual_value\"' for p in param_matches[:3])}}})"
+            f"ERROR: Query contains parameters {unique_params} but no params dict was provided.\n"
+            f"ACTION REQUIRED: Look at the original queries in your task to find the actual values.\n"
+            f"Then call: neo4j_read_cypher(query, {{\"{unique_params[0]}\": \"actual_value_from_original_query\"}})\n"
+            f"Example: If original query had 'Kiss and Tell', use: {{\"film_title\": \"Kiss and Tell\"}}"
         )
     
     return _get_tools().read_cypher(query, params)
@@ -352,3 +354,107 @@ REFINEMENT_TOOLS = [
 def get_schema() -> str:
     """Fetch schema - for use by orchestrating code, not agents."""
     return _get_tools().get_schema()
+
+
+def neo4j_hybrid_search(
+    query_text: str,
+    vector_index_name: str = "chunk-embeddings",
+    fulltext_index_name: str = "chunk-fulltext",
+    top_k: int = 5
+) -> str:
+    """
+    Perform a hybrid search combining vector similarity and full-text search.
+    
+    This tool searches for relevant Chunk nodes using both:
+    - Vector similarity (semantic search via embeddings)
+    - Full-text search (keyword matching)
+    
+    The results are combined and ranked by relevance.
+    
+    NOTE: This requires both vector and fulltext indexes to exist in Neo4j.
+    If indexes don't exist, the search will fail gracefully with an error message.
+    
+    Args:
+        query_text: The search query text
+        vector_index_name: Name of the vector index (default: "chunk-embeddings")
+        fulltext_index_name: Name of the fulltext index (default: "chunk-fulltext")
+        top_k: Number of results to return (default: 5)
+        
+    Returns:
+        String representation of search results with chunks and their text, or error message
+    """
+    logger.debug(f"Performing hybrid search for: {query_text[:100]}...")
+    
+    try:
+        # Try to import neo4j-graphrag
+        try:
+            from neo4j_graphrag.retrievers import HybridRetriever
+            from neo4j_graphrag.embeddings import OpenAIEmbeddings
+            from neo4j import GraphDatabase
+        except ImportError:
+            return (
+                "ERROR: neo4j-graphrag not installed. "
+                "Install with: pip install neo4j-graphrag"
+            )
+        
+        # Get driver from tools instance
+        tools = _get_tools()
+        driver = tools._get_driver()
+        
+        # Create embedder
+        embedder = OpenAIEmbeddings(model="text-embedding-3-large")
+        
+        # Create hybrid retriever
+        retriever = HybridRetriever(
+            driver,
+            vector_index_name,
+            fulltext_index_name,
+            embedder
+        )
+        
+        # Perform search
+        results = retriever.search(query_text=query_text, top_k=top_k)
+        
+        if not results or not results.results:
+            return f"Hybrid search returned no results for: {query_text}"
+        
+        # Format results
+        output_parts = []
+        output_parts.append(f"Hybrid search returned {len(results.results)} result(s):\n")
+        
+        for i, result in enumerate(results.results[:top_k], 1):
+            node = result.node
+            score = getattr(result, 'score', None)
+            
+            # Extract text from chunk
+            text = node.get('text', '') if isinstance(node, dict) else getattr(node, 'text', '')
+            chunk_id = node.get('id', '') if isinstance(node, dict) else getattr(node, 'id', '')
+            
+            output_parts.append(f"[{i}] Chunk ID: {chunk_id}")
+            if score is not None:
+                output_parts.append(f"    Score: {score:.4f}")
+            output_parts.append(f"    Text: {text[:200]}...")
+            output_parts.append("")
+        
+        output = "\n".join(output_parts)
+        logger.debug(f"Hybrid search returned {len(results.results)} results")
+        return output
+        
+    except Exception as e:
+        error_msg = f"Hybrid search error: {str(e)}"
+        logger.warning(error_msg, exc_info=True)
+        return f"ERROR: {error_msg}"
+
+
+# Tool registry for Deep Agent
+AGENT_TOOLS = [
+    neo4j_get_schema,
+    neo4j_read_cypher,
+    neo4j_hybrid_search
+]
+
+# Tools for refinement agent (schema provided in prompt - no get_schema, but includes hybrid search)
+REFINEMENT_TOOLS = [
+    neo4j_read_cypher,
+    neo4j_hybrid_search
+]

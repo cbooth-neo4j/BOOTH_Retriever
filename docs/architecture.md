@@ -11,7 +11,7 @@ flowchart TD
     D -->|Yes| E[Extract Parameters]
     E --> F[Execute Parameterized Cypher]
     F --> G[Summarize Results]
-    G --> H[Output Answer - NO LLM INFERENCE!]
+    G --> H[Output Answer - Minimal LLM Inference needed!]
     
     D -->|No| I{High risk query?}
     

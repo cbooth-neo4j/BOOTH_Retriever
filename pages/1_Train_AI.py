@@ -79,7 +79,7 @@ if not pending_queries:
     - This improves accuracy and consistency over time
     """)
 else:
-    st.header(f"Queries for Review ({len(pending_queries)})")
+    st.header(f"Query store")
     
     # Group queries by status and success
     # User-validated: ONLY queries where user gave helpful feedback (thumbs up)
@@ -99,11 +99,13 @@ else:
     rejected_queries = [q for q in pending_queries if q.get('status') == 'rejected']
     needs_review_queries = [q for q in pending_queries if q.get('status') == 'needs_review']
     needs_human_support_queries = [q for q in pending_queries if q.get('status') == 'needs_human_support']
+    approved_queries = [q for q in pending_queries if q.get('status') == 'approved']
     
     # Tab definitions for tooltips
     tab_definitions = {
         "user_validated": "Queries validated by users (👍 thumbed up). These are high-priority candidates for approval since a real user confirmed the answer was helpful.",
-        "approved": "Queries that executed successfully but haven't been validated by users yet. Review the Cypher and results before approving as few-shot examples.",
+        "pending_approval": "Queries that executed successfully but haven't been validated by users yet. Review the Cypher and results before approving as few-shot examples.",
+        "approved": "Queries that have been approved and are now being used as few-shot examples for similar future queries.",
         "failed": "Queries that failed to produce results. Review to understand why and reject or debug.",
         "declined": "High-risk queries that were declined to users. The AI ran in the background - some succeeded (🤖) and some failed (❌). Successful ones can be approved for training.",
         "rejected": "Previously rejected queries. Can be re-approved if needed.",
@@ -112,9 +114,10 @@ else:
     }
     
     # Tabs for different statuses
-    tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         f"👤 User Validated ({len(user_validated_queries)})",
-        f"✅ Approved ({len(pending_successful)})", 
+        f"⏳ Pending Approval ({len(pending_successful)})",
+        f"✅ Approved ({len(approved_queries)})", 
         f"❌ Failed ({len(pending_failed)})",
         f"⚠️ Declined ({len(declined_queries)})",
         f"🚫 Rejected ({len(rejected_queries)})",
@@ -157,20 +160,30 @@ else:
                     # Results
                     st.markdown("### 📊 Results")
                     
-                    col1, col2 = st.columns([2, 1])
+                    st.markdown("**Summary:**")
+                    st.success(query['summary'])
                     
-                    with col1:
-                        st.markdown("**Summary:**")
-                        st.success(query['summary'])
-                    
-                    with col2:
-                        if query.get('result_data'):
-                            with st.expander("View Raw Data"):
-                                try:
-                                    data = json.loads(query['result_data'])
-                                    st.json(data)
-                                except:
-                                    st.text(query['result_data'])
+                    # Show original cypher with multi-step queries and raw data
+                    if query.get('result_data'):
+                        with st.expander("🔧 View Original Cypher"):
+                            st.markdown("**Last Query Executed:**")
+                            st.code(query['cypher_text'], language="cypher")
+                            
+                            try:
+                                data = json.loads(query['result_data'])
+                                queries_executed = data.get('queries_executed', [])
+                                
+                                if queries_executed:
+                                    st.markdown("**Multi-Step Queries Executed:**")
+                                    for i, q in enumerate(queries_executed):
+                                        st.markdown(f"**Query {i}:**")
+                                        st.code(q, language="cypher")
+                                
+                                st.markdown("**Raw Data:**")
+                                st.json(data)
+                            except:
+                                st.markdown("**Raw Data:**")
+                                st.text(query['result_data'])
                     
                     # Action buttons
                     st.markdown("---")
@@ -179,7 +192,7 @@ else:
                     with col1:
                         if st.button(
                             "✅ Approve & Refine",
-                            key=f"approve_validated_{query['query_id']}",
+                            key=f"approve_validated_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True
                         ):
@@ -195,12 +208,6 @@ else:
                                 if result.get('success'):
                                     logger.info(f"Validated query {query['query_id']} approved with refinement")
                                     st.success("✅ Query approved and template created!")
-                                    st.info(f"""
-                                    **Refinement Results:**
-                                    - **Category:** {result.get('category', 'N/A')}
-                                    - **Template:** {result.get('question_template', 'N/A')}
-                                    - **Parameters:** {', '.join(result.get('parameters', []))}
-                                    """)
                                     if result.get('refined_cypher'):
                                         st.code(result['refined_cypher'], language="cypher")
                                     st.rerun()
@@ -218,7 +225,7 @@ else:
                     with col2:
                         if st.button(
                             "❌ Reject",
-                            key=f"reject_validated_{query['query_id']}",
+                            key=f"reject_validated_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -238,7 +245,7 @@ else:
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
     with tab1:
-        st.caption(f"ℹ️ {tab_definitions['approved']}")
+        st.caption(f"ℹ️ {tab_definitions['pending_approval']}")
         st.markdown("---")
         
         if not pending_successful:
@@ -264,20 +271,30 @@ else:
                     # Results
                     st.markdown("### 📊 Results")
                     
-                    col1, col2 = st.columns([2, 1])
+                    st.markdown("**Summary:**")
+                    st.success(query['summary'])
                     
-                    with col1:
-                        st.markdown("**Summary:**")
-                        st.success(query['summary'])
-                    
-                    with col2:
-                        if query.get('result_data'):
-                            with st.expander("View Raw Data"):
-                                try:
-                                    data = json.loads(query['result_data'])
-                                    st.json(data)
-                                except:
-                                    st.text(query['result_data'])
+                    # Show original cypher with multi-step queries and raw data
+                    if query.get('result_data'):
+                        with st.expander("🔧 View Original Cypher"):
+                            st.markdown("**Last Query Executed:**")
+                            st.code(query['cypher_text'], language="cypher")
+                            
+                            try:
+                                data = json.loads(query['result_data'])
+                                queries_executed = data.get('queries_executed', [])
+                                
+                                if queries_executed:
+                                    st.markdown("**Multi-Step Queries Executed:**")
+                                    for i, q in enumerate(queries_executed):
+                                        st.markdown(f"**Query {i}:**")
+                                        st.code(q, language="cypher")
+                                
+                                st.markdown("**Raw Data:**")
+                                st.json(data)
+                            except:
+                                st.markdown("**Raw Data:**")
+                                st.text(query['result_data'])
                     
                     # Action buttons
                     st.markdown("---")
@@ -286,7 +303,7 @@ else:
                     with col1:
                         if st.button(
                             "✅ Approve",
-                            key=f"approve_{query['query_id']}",
+                            key=f"approve_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True
                         ):
@@ -306,7 +323,7 @@ else:
                     with col2:
                         if st.button(
                             "❌ Reject",
-                            key=f"reject_{query['query_id']}",
+                            key=f"reject_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -326,6 +343,98 @@ else:
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
     with tab2:
+        st.caption(f"ℹ️ {tab_definitions['approved']}")
+        st.markdown("---")
+        
+        if not approved_queries:
+            st.info("No approved queries found.")
+            st.markdown("""
+            Approved queries will appear here after you approve them in other tabs.
+            
+            These queries are now being used as few-shot examples for similar future queries.
+            """)
+        else:
+            st.success(f"✅ {len(approved_queries)} approved query/queries are being used as few-shot examples.")
+            
+            for idx, query in enumerate(approved_queries):
+                with st.expander(
+                    f"✅ Query {idx + 1}: {query['query_text'][:80]}...",
+                    expanded=(idx == 0)
+                ):
+                    
+                    # Query details
+                    st.markdown("### 📝 Query")
+                    st.info(query['query_text'])
+                    
+                    # Timestamp
+                    timestamp = query.get('timestamp', 'N/A')
+                    st.caption(f"Submitted: {timestamp}")
+                    
+                    # Cypher query
+                    if query.get('refined_cypher'):
+                        st.markdown("### ✨ Refined Cypher Template")
+                        st.code(query['refined_cypher'], language="cypher")
+                        
+                        # Show original attempt in expander with multi-step queries and raw data
+                        if query.get('cypher_text') or query.get('result_data'):
+                            with st.expander("🔧 View Original Cypher"):
+                                if query.get('cypher_text'):
+                                    st.markdown("**Last Query Executed:**")
+                                    st.code(query['cypher_text'], language="cypher")
+                                
+                                if query.get('result_data'):
+                                    try:
+                                        data = json.loads(query['result_data'])
+                                        queries_executed = data.get('queries_executed', [])
+                                        
+                                        if queries_executed:
+                                            st.markdown("**Multi-Step Queries Executed:**")
+                                            for i, q in enumerate(queries_executed):
+                                                st.markdown(f"**Query {i}:**")
+                                                st.code(q, language="cypher")
+                                        
+                                        st.markdown("**Raw Data:**")
+                                        st.json(data)
+                                    except:
+                                        st.markdown("**Raw Data:**")
+                                        st.text(query['result_data'])
+                    elif query.get('cypher_text'):
+                        st.markdown("### 🔧 Generated Cypher")
+                        st.code(query['cypher_text'], language="cypher")
+                    
+                    # Results
+                    if query.get('summary'):
+                        st.markdown("### 📊 Results")
+                        st.markdown("**Summary:**")
+                        st.success(query['summary'])
+                    
+                    # Action buttons
+                    st.markdown("---")
+                    col1, col2 = st.columns([1, 3])
+                    
+                    with col1:
+                        if st.button(
+                            "🗑️ Delete",
+                            key=f"delete_approved_{idx}_{query['query_id']}",
+                            type="secondary",
+                            use_container_width=True
+                        ):
+                            try:
+                                logger.info(f"User deleting approved query: {query['query_id']}")
+                                success = st.session_state.orchestrator.delete_query(query['query_id'])
+                                if success:
+                                    logger.info(f"Approved query {query['query_id']} deleted successfully")
+                                    st.success("✅ Query deleted successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("Query not found or could not be deleted.")
+                            except Exception as e:
+                                logger.error(f"Failed to delete query {query['query_id']}: {str(e)}", exc_info=True)
+                                st.error(f"Failed to delete: {str(e)}")
+                    
+                    st.markdown(f"**Query ID:** `{query['query_id']}`")
+    
+    with tab3:
         st.caption(f"ℹ️ {tab_definitions['failed']}")
         st.markdown("---")
         
@@ -359,7 +468,7 @@ else:
                     with col1:
                         if st.button(
                             "❌ Reject",
-                            key=f"reject_failed_{query['query_id']}",
+                            key=f"reject_failed_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -378,7 +487,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab3:
+    with tab4:
         st.caption(f"ℹ️ {tab_definitions['declined']}")
         st.markdown("---")
         
@@ -392,9 +501,6 @@ else:
             
             st.warning("These queries were marked as high-risk by users and automatically declined. The system ran the agent in the background and attempted refinement.")
             
-            # Show counts
-            st.markdown(f"**✨ Refined:** {len(declined_refined)} | **🤖 Pending Refinement:** {len(declined_pending)} | **❌ AI Failed:** {len(declined_failed)}")
-            st.markdown("---")
             
             for idx, query in enumerate(declined_queries):
                 # Determine if AI succeeded and if refinement was done
@@ -436,21 +542,28 @@ else:
                         st.markdown("### ✨ Refined Cypher Template (Few-Shot Ready)")
                         st.code(query['refined_cypher'], language="cypher")
                         
-                        # Show refinement metadata
-                        col_meta1, col_meta2 = st.columns(2)
-                        with col_meta1:
-                            st.markdown(f"**Category:** `{query.get('category', 'N/A')}`")
-                        with col_meta2:
-                            params = query.get('parameters', [])
-                            if params:
-                                st.markdown(f"**Parameters:** `{', '.join(params)}`")
-                        
-                        if query.get('question_template'):
-                            st.markdown(f"**Question Template:** {query.get('question_template')}")
-                        
-                        # Show original attempt in expander
+                        # Show original attempt in expander with multi-step queries and raw data
                         with st.expander("🔧 View Original Cypher Attempt"):
-                            st.code(query.get('cypher_text', 'N/A'), language="cypher")
+                            if query.get('cypher_text'):
+                                st.markdown("**Last Query Executed:**")
+                                st.code(query['cypher_text'], language="cypher")
+                            
+                            if query.get('result_data'):
+                                try:
+                                    data = json.loads(query['result_data'])
+                                    queries_executed = data.get('queries_executed', [])
+                                    
+                                    if queries_executed:
+                                        st.markdown("**Multi-Step Queries Executed:**")
+                                        for i, q in enumerate(queries_executed):
+                                            st.markdown(f"**Query {i}:**")
+                                            st.code(q, language="cypher")
+                                    
+                                    st.markdown("**Raw Data:**")
+                                    st.json(data)
+                                except:
+                                    st.markdown("**Raw Data:**")
+                                    st.text(query.get('result_data', ''))
                     elif query.get('cypher_text'):
                         st.markdown("### 🔧 Generated Cypher Attempt")
                         st.code(query['cypher_text'], language="cypher")
@@ -461,7 +574,6 @@ else:
                     if query.get('summary'):
                         st.markdown("### 📊 Results (Hidden from User)")
                         st.success(query['summary'])
-                        st.caption("✓ The query would have succeeded if shown to user")
                     elif query.get('cypher_text'):
                         st.markdown("### ⚠️ Execution Status")
                         st.warning("The agent did not produce successful results.")
@@ -479,7 +591,7 @@ else:
                         
                         if st.button(
                             approve_label,
-                            key=f"approve_declined_{query['query_id']}",
+                            key=f"approve_declined_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True,
                             disabled=not (refinement_done or ai_succeeded)
@@ -504,7 +616,6 @@ else:
                                         )
                                     if result.get('success'):
                                         st.success("✅ Query approved and template created!")
-                                        st.info(f"**Category:** {result.get('category', 'N/A')}")
                                     elif result.get('needs_human_support'):
                                         st.warning(f"⚠️ Refinement failed: {result.get('error')}")
                                     else:
@@ -524,7 +635,7 @@ else:
                     with col2:
                         if st.button(
                             "❌ Reject",
-                            key=f"keep_rejected_declined_{query['query_id']}",
+                            key=f"keep_rejected_declined_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -543,7 +654,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab4:
+    with tab5:
         st.caption(f"ℹ️ {tab_definitions['rejected']}")
         st.markdown("---")
         
@@ -582,7 +693,7 @@ else:
                     with col1:
                         if st.button(
                             "✅ Re-approve",
-                            key=f"reapprove_{query['query_id']}",
+                            key=f"reapprove_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True,
                             disabled=not query.get('cypher_text')
@@ -602,7 +713,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab5:
+    with tab6:
         st.caption(f"ℹ️ {tab_definitions['needs_review']}")
         st.markdown("---")
         
@@ -645,7 +756,7 @@ else:
                     with col1:
                         if st.button(
                             "✅ Approve Anyway",
-                            key=f"approve_review_{query['query_id']}",
+                            key=f"approve_review_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True,
                             disabled=not query.get('cypher_text')
@@ -666,7 +777,7 @@ else:
                     with col2:
                         if st.button(
                             "❌ Reject",
-                            key=f"reject_review_{query['query_id']}",
+                            key=f"reject_review_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -685,7 +796,7 @@ else:
                     
                     st.markdown(f"**Query ID:** `{query['query_id']}`")
     
-    with tab6:
+    with tab7:
         st.caption(f"ℹ️ {tab_definitions['needs_human_support']}")
         st.markdown("---")
         
@@ -741,7 +852,7 @@ else:
                     
                     # Results
                     if query.get('summary'):
-                        st.markdown("### 📊 Approved Answer")
+                        st.markdown("### 📊 Suggested Answer")
                         st.success(query['summary'])
                     
                     # Manual template creation section
@@ -754,7 +865,7 @@ else:
                         manual_template = st.text_area(
                             "Question Template",
                             placeholder="What {attribute} did {person} hold?",
-                            key=f"manual_template_{query['query_id']}",
+                            key=f"manual_template_{idx}_{query['query_id']}",
                             help="Parameterize with {param_name} syntax"
                         )
                         
@@ -765,31 +876,63 @@ else:
                                 "WORK_PARTICIPANT", "LOCATION_COMPARISON", "LOCATION_ATTRIBUTE",
                                 "TEMPORAL", "RELATIONSHIP", "FACTUAL", "MULTI_HOP", "OTHER"
                             ],
-                            key=f"manual_category_{query['query_id']}"
+                            key=f"manual_category_{idx}_{query['query_id']}"
                         )
                     
                     with col_b:
                         manual_cypher = st.text_area(
                             "Parameterized Cypher",
                             placeholder="MATCH (p:PERSON) WHERE p.name CONTAINS $person_name RETURN p.name, p.description",
-                            key=f"manual_cypher_{query['query_id']}",
+                            key=f"manual_cypher_{idx}_{query['query_id']}",
                             help="Use $param_name for parameters"
                         )
                         
                         manual_params = st.text_input(
                             "Parameters (comma-separated)",
                             placeholder="person_name, attribute",
-                            key=f"manual_params_{query['query_id']}"
+                            key=f"manual_params_{idx}_{query['query_id']}"
                         )
                     
                     # Action buttons
                     st.markdown("---")
-                    col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+                    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
                     
                     with col1:
                         if st.button(
+                            "✅ Approve Answer",
+                            key=f"approve_answer_{idx}_{query['query_id']}",
+                            type="primary",
+                            use_container_width=True,
+                            help="Approve this answer without creating a template. Use when multi-step inference is good enough."
+                        ):
+                            try:
+                                logger.info(f"Approving answer for query {query['query_id']} without template creation")
+                                # Get cypher_id if available
+                                cypher_id = query.get('cypher_id')
+                                if cypher_id:
+                                    # Use approve_query which marks as approved and creates FEW_SHOT_PROMPT relationship
+                                    st.session_state.orchestrator.approve_query(
+                                        query['query_id'],
+                                        cypher_id
+                                    )
+                                else:
+                                    # Fallback: update Query node status directly (not UserQuestion)
+                                    with st.session_state.orchestrator.neo4j_client.driver.session() as session:
+                                        session.run("""
+                                            MATCH (q:Query {id: $query_id})
+                                            SET q.status = 'approved'
+                                        """, query_id=query['query_id'])
+                                logger.info(f"Answer approved for query {query['query_id']}")
+                                st.success("✅ Answer approved! (No template created - multi-step inference is sufficient)")
+                                st.rerun()
+                            except Exception as e:
+                                logger.error(f"Failed to approve answer: {str(e)}", exc_info=True)
+                                st.error(f"Failed to approve: {str(e)}")
+                    
+                    with col2:
+                        if st.button(
                             "💾 Save Template",
-                            key=f"save_template_{query['query_id']}",
+                            key=f"save_template_{idx}_{query['query_id']}",
                             type="primary",
                             use_container_width=True,
                             disabled=not (manual_template and manual_cypher)
@@ -799,33 +942,31 @@ else:
                                 params = [p.strip() for p in manual_params.split(',') if p.strip()]
                                 
                                 # Create template manually
-                                logger.info(f"Manually creating template for query {query['query_id']}")
+                                logger.info(f"Manually creating FewShot for query {query['query_id']}")
                                 
-                                # Get embedding for template
-                                template_embedding = st.session_state.orchestrator.llm_client.get_embedding(manual_template)
-                                
-                                # Store template
-                                template_id = st.session_state.orchestrator.neo4j_client.store_query_template(
-                                    template=manual_template,
-                                    category=manual_category,
-                                    embedding=template_embedding,
-                                    parameters=params
-                                )
-                                
-                                # Store few-shot cypher
-                                st.session_state.orchestrator.neo4j_client.store_few_shot_cypher(
-                                    template_id=template_id,
+                                # Store FewShot linked to the existing Query node
+                                few_shot_id = st.session_state.orchestrator.neo4j_client.store_few_shot_for_query(
+                                    query_id=query['query_id'],
                                     cypher_template=manual_cypher,
                                     parameters=params,
-                                    refinement_attempts=0,  # Manual
-                                    source_question_id=query['query_id']
+                                    example_values={"category": manual_category} if manual_category else None
                                 )
                                 
-                                # Update question status
-                                st.session_state.orchestrator.neo4j_client.update_user_question_status(
-                                    query['query_id'],
-                                    'approved'
-                                )
+                                # Update Query node status to approved (not UserQuestion)
+                                cypher_id = query.get('cypher_id')
+                                if cypher_id:
+                                    # Use approve_query to create FEW_SHOT_PROMPT relationship
+                                    st.session_state.orchestrator.approve_query(
+                                        query['query_id'],
+                                        cypher_id
+                                    )
+                                else:
+                                    # Fallback: just update Query status if no cypher_id
+                                    with st.session_state.orchestrator.neo4j_client.driver.session() as session:
+                                        session.run("""
+                                            MATCH (q:Query {id: $query_id})
+                                            SET q.status = 'approved'
+                                        """, query_id=query['query_id'])
                                 
                                 logger.info(f"Manual template created for query {query['query_id']}")
                                 st.success("✅ Template created successfully!")
@@ -834,10 +975,10 @@ else:
                                 logger.error(f"Failed to create manual template: {str(e)}", exc_info=True)
                                 st.error(f"Failed to save template: {str(e)}")
                     
-                    with col2:
+                    with col3:
                         if st.button(
                             "🔄 Retry Refinement",
-                            key=f"retry_refine_{query['query_id']}",
+                            key=f"retry_refine_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -858,10 +999,10 @@ else:
                                 logger.error(f"Retry refinement failed: {str(e)}", exc_info=True)
                                 st.error(f"Retry failed: {str(e)}")
                     
-                    with col3:
+                    with col4:
                         if st.button(
                             "❌ Reject",
-                            key=f"reject_support_{query['query_id']}",
+                            key=f"reject_support_{idx}_{query['query_id']}",
                             use_container_width=True
                         ):
                             try:
@@ -888,7 +1029,9 @@ with st.sidebar:
     
     **👤 User Validated** - High-priority! Queries users marked as helpful OR declined queries where AI succeeded.
     
-    **✅ Approved** - AI generated results but no user feedback yet. Ready for curator review.
+    **⏳ Pending Approval** - AI generated results but no user feedback yet. Ready for curator review.
+    
+    **✅ Approved** - Queries that have been approved and are now being used as few-shot examples.
     
     **❌ Failed** - Queries that didn't produce results.
     

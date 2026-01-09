@@ -23,14 +23,14 @@ from src.agents.tools import REFINEMENT_TOOLS, init_tools, get_schema
 
 logger = setup_logger("booth.agents.refinement")
 
-# Try to import LangChain agent (simpler than Deep Agents for bounded tasks)
+# Try to import Deep Agents
 try:
-    from langgraph.prebuilt import create_react_agent
-    AGENT_AVAILABLE = True
+    from deepagents import create_deep_agent
+    DEEP_AGENTS_AVAILABLE = True
 except ImportError:
-    AGENT_AVAILABLE = False
-    create_react_agent = None
-    logger.warning("LangGraph not installed. Install with: pip install langgraph")
+    DEEP_AGENTS_AVAILABLE = False
+    create_deep_agent = None
+    logger.warning("Deep Agents not installed. Install with: pip install deepagents")
 
 
 # Question categories for auto-classification
@@ -45,40 +45,170 @@ QUESTION_CATEGORIES = [
     ("RELATIONSHIP", "Questions about how entities are related"),
     ("FACTUAL", "Simple fact lookup questions"),
     ("MULTI_HOP", "Questions requiring traversal across multiple relationships"),
+    ("VECTOR_SEARCH", "Questions that can be answered with simple vector/hybrid search in Chunks"),
 ]
 
-
-REFINEMENT_SYSTEM_PROMPT = """Combine multiple Cypher queries into ONE simple, parameterized query.
+REFINEMENT_SYSTEM_PROMPT = """Combine multiple Cypher queries into ONE simple, parameterized query OR determine if vector/hybrid search suffices.
 
 ## GOAL
-Create a REUSABLE query template that works for ANY similar question.
+Create a REUSABLE query template that works for ANY similar question, OR determine if a simple vector/hybrid search would be sufficient.
 
 ## DATABASE SCHEMA (provided - DO NOT call neo4j_get_schema)
 {schema}
 
-## TASK
-1. Analyze the queries that answered the question
-2. Write ONE Cypher combining the key logic
-3. Replace entity names with $param_name
-4. Test ONCE: neo4j_read_cypher(query, params_dict)
-5. Output JSON
+## REFINEMENT PROCESS
+
+### STEP 0: CHECK IF VECTOR/HYBRID SEARCH SUFFICES
+**FIRST, consider if a simple vector/hybrid search would work:**
+- If the queries are primarily searching Chunk.text with CONTAINS filters
+- If the question is asking for factual information that might be in chunks
+- If there are no complex relationship traversals (just simple entity lookups)
+
+**Test vector/hybrid search:**
+1. Use `neo4j_hybrid_search(query_text, top_k=5)` with the original question
+2. If results are relevant and answer the question → Use VECTOR_SEARCH category
+3. Output: `{{"success": true, "retrieval_type": "hybrid_search", "category": "VECTOR_SEARCH", "test_params": {{"query_text": "..."}}}}`
+
+**If vector/hybrid search works, STOP HERE. No need for Cypher refinement.**
+
+### STEP 1: ANALYZE THE QUERIES
+If vector/hybrid search doesn't suffice, analyze what each query does:
+- What entities does it match? (FILM, PERSON, Chunk, etc.)
+- What relationships does it traverse? (RELATED_TO, HAS_ENTITY, etc.)
+- What filters does it apply? (name CONTAINS, text CONTAINS, etc.)
+- What does it return? (properties, evidence, text, etc.)
+
+**Identify query types:**
+- **Relationship-based queries**: Use MATCH/OPTIONAL MATCH with relationships
+- **Text-search queries**: Use WHERE with CONTAINS on text properties (especially Chunk.text)
+- **Mixed queries**: May need UNION ALL to combine both types
+
+### STEP 2: IDENTIFY THE PATTERN
+Look for the logical flow:
+- Do queries build on each other? (e.g., FILM → PERSON → POLITICAL_POSITION)
+- Are they independent searches? (e.g., film info + separate chunk search)
+- Do they share common entities? (e.g., both reference the same person)
+
+**Key insight**: If you have BOTH relationship traversals AND text searches in Chunks, you likely need UNION ALL because:
+- Relationship queries use MATCH patterns
+- Text searches use WHERE CONTAINS on Chunk.text
+- These can't easily be combined in a single MATCH pattern
+
+### STEP 3: DESIGN THE CONSOLIDATED QUERY
+
+**For relationship-based queries:**
+```
+MATCH (start:LABEL)
+WHERE start.property CONTAINS $param
+OPTIONAL MATCH (start)-[r1:REL]-(middle:LABEL)
+OPTIONAL MATCH (middle)-[r2:REL]-(end:LABEL)
+RETURN ...
+```
+
+**For text-search queries:**
+```
+MATCH (c:Chunk)
+WHERE c.text CONTAINS $param1
+  AND (c.text CONTAINS $param2 OR c.text CONTAINS $param3)
+RETURN ...
+```
+
+**For mixed queries (relationship + text search):**
+```
+// Relationship part
+MATCH (entity:LABEL)
+WHERE entity.property CONTAINS $param1
+OPTIONAL MATCH (entity)-[r:REL]-(related:LABEL)
+RETURN ..., null AS chunk_text
+LIMIT N
+
+UNION ALL
+
+// Text search part
+MATCH (c:Chunk)
+WHERE c.text CONTAINS $param2
+  AND ($search_terms IS NULL OR ANY(term IN $search_terms WHERE c.text CONTAINS term))
+RETURN null AS ..., c.text AS chunk_text
+LIMIT M
+```
+
+**UNION ALL requirements:**
+- Both parts must return the SAME column names in the SAME order
+- Use `null AS column_name` for columns not applicable to that part
+- Use DISTINCT if needed to avoid duplicates
+
+### STEP 4: PARAMETERIZE
+Replace hardcoded values with $parameters:
+- Entity names → `$entity_name`
+- Search terms → `$search_term` or `$search_terms` (array for multiple OR conditions)
+- Keep LIMIT values as-is (they're query structure, not data)
+
+**For multiple OR conditions in text search:**
+- Instead of: `WHERE c.text CONTAINS 'term1' OR c.text CONTAINS 'term2'`
+- Use array: `WHERE ANY(term IN $search_terms WHERE c.text CONTAINS term)`
+- Pass: `{{"search_terms": ["term1", "term2", "term3"]}}`
+
+### STEP 5: TEST ONCE
+1. Extract actual values from original queries
+2. Build params dict with those values
+3. Call: `neo4j_read_cypher(query, params_dict)`
+4. If it returns results (not an error), IMMEDIATELY output JSON
+5. **STOP** - Do NOT test again, do NOT refine further
 
 ## TOOL: neo4j_read_cypher(query, params)
-Example: neo4j_read_cypher("MATCH (f:FILM) WHERE f.name CONTAINS $title RETURN f", {{"title": "Kiss"}})
-- ALWAYS pass params dict when using $variables
-- Test ONCE, then output result
+**CRITICAL: When your query has $variables, you MUST pass a params dict with actual values.**
+
+**WRONG (will fail):**
+```
+neo4j_read_cypher("MATCH (f:FILM) WHERE f.name CONTAINS $film_title RETURN f")
+```
+
+**CORRECT (will work):**
+```
+neo4j_read_cypher("MATCH (f:FILM) WHERE f.name CONTAINS $film_title RETURN f", {{"film_title": "Kiss and Tell"}})
+```
+
+**For array parameters:**
+```
+neo4j_read_cypher(
+  "MATCH (c:Chunk) WHERE ANY(term IN $terms WHERE c.text CONTAINS term) RETURN c",
+  {{"terms": ["Ambassador", "diplomat", "appointed"]}}
+)
+```
+
+**CRITICAL STOPPING RULE:**
+- Test your parameterized query ONCE with actual values
+- If the test returns results (not an error), IMMEDIATELY output the JSON
+- DO NOT test again, DO NOT refine further, DO NOT try variations
+- One successful test = output JSON and STOP
 
 ## CATEGORIES
 {categories}
 
 ## OUTPUT (JSON only)
-Success: {{"success": true, "refined_cypher": "MATCH...", "parameters": ["param_name"], "question_template": "What...?", "category": "CATEGORY", "test_params": {{"param": "value"}}}}
+Success (Cypher): {{"success": true, "retrieval_type": "cypher", "refined_cypher": "MATCH...", "parameters": ["param_name"], "category": "CATEGORY", "test_params": {{"param": "value"}}}}
+Success (Vector/Hybrid): {{"success": true, "retrieval_type": "hybrid_search", "category": "VECTOR_SEARCH", "test_params": {{"query_text": "original question"}}}}
 Failure: {{"success": false, "reason": "why", "needs_human_support": true}}
 
 ## RULES
 - Simple: MATCH → WHERE → RETURN → LIMIT
+- Use UNION ALL when combining relationship queries with text searches
 - ONE test, then output JSON
 - DO NOT call neo4j_get_schema (schema provided above)
+
+## IF YOU SEE AN ERROR ABOUT MISSING PARAMS
+If you get: "ERROR: Query contains parameters [...] but no params dict was provided"
+→ You wrote a parameterized query but forgot to pass the params dict
+→ Look at the original queries to find the actual values (e.g., "Kiss and Tell")
+→ Call the tool again with: `neo4j_read_cypher(query, {{"param_name": "actual_value"}})`
+→ DO NOT keep trying without params - it will always fail!
+
+## IF YOUR TEST SUCCEEDS
+If you see: "Query returned X result(s):" (not an ERROR)
+→ Your query works! STOP testing immediately
+→ Extract the parameters list from your query (e.g., ["film_title", "person_name", "search_terms"])
+→ Output the JSON with success=true, refined_cypher, parameters, category, test_params
+→ DO NOT test again, DO NOT refine further - you're done!
 """
 
 
@@ -86,9 +216,9 @@ Failure: {{"success": false, "reason": "why", "needs_human_support": true}}
 class RefinementResult:
     """Result from the refinement process"""
     success: bool
+    retrieval_type: Optional[str] = None  # "cypher" or "hybrid_search"
     refined_cypher: Optional[str] = None
     parameters: Optional[List[str]] = None
-    question_template: Optional[str] = None
     category: Optional[str] = None
     test_params: Optional[Dict[str, str]] = None
     attempts: int = 0
@@ -118,9 +248,9 @@ class RefinementAgent:
             neo4j_client: Optional Neo4jClient for reusing connection
             model: Override the configured model
         """
-        if not AGENT_AVAILABLE:
+        if not DEEP_AGENTS_AVAILABLE:
             raise ImportError(
-                "LangGraph not installed. Install with: pip install langgraph"
+                "Deep Agents not installed. Install with: pip install deepagents"
             )
         
         self.neo4j_client = neo4j_client
@@ -168,14 +298,13 @@ class RefinementAgent:
         return prompt
     
     def _create_agent(self, schema: str, existing_categories: List[str] = None):
-        """Create a simple ReAct agent for refinement (no planning overhead)."""
+        """Create the Deep Agent for refinement with schema injected."""
         system_prompt = self._get_system_prompt(schema, existing_categories)
         
-        # Use simple ReAct agent - direct tool loop without planning/subagents
-        return create_react_agent(
+        return create_deep_agent(
             model=self.llm,
             tools=REFINEMENT_TOOLS,  # Only read_cypher - no get_schema
-            state_modifier=system_prompt  # System prompt for the agent
+            system_prompt=system_prompt
         )
     
     def _build_refinement_prompt(
@@ -274,7 +403,7 @@ class RefinementAgent:
             logger.info("Fetching database schema for refinement...")
             schema = get_schema()
             
-            # Create agent with schema injected
+            # Create agent with schema injected in system prompt
             agent = self._create_agent(schema, existing_categories)
             
             # Build the refinement prompt
@@ -308,7 +437,7 @@ class RefinementAgent:
                 
                 for event in agent.stream(
                     {"messages": [{"role": "user", "content": user_prompt}]},
-                    config={"recursion_limit": 12},  # ~5 tool calls max
+                    config={"recursion_limit": 18},  # Allow room for testing + JSON output
                     stream_mode="values"
                 ):
                     # Log tool calls and results as they happen
@@ -423,11 +552,12 @@ class RefinementAgent:
                 )
             
             if json_result.get('success', False):
+                retrieval_type = json_result.get('retrieval_type', 'cypher')
                 return RefinementResult(
                     success=True,
+                    retrieval_type=retrieval_type,
                     refined_cypher=json_result.get('refined_cypher'),
                     parameters=json_result.get('parameters', []),
-                    question_template=json_result.get('question_template'),
                     category=json_result.get('category'),
                     test_params=json_result.get('test_params', {}),
                     attempts=tool_calls_count

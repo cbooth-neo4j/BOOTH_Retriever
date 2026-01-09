@@ -1,10 +1,10 @@
 """Unified Neo4j client for vector search, storage, and query execution.
 
-Updated data model (v2):
-- UserQuestion: Individual user questions with embeddings
-- QueryTemplate: Parameterized question patterns for matching
-- FewShotCypher: Approved parameterized Cypher queries
-- CypherAttempt/Response: Audit trail (existing)
+Data model:
+- UserQuestion: Individual user questions (verbatim)
+- Query: Canonical question patterns with embeddings for similarity matching
+- FewShot: Approved parameterized Cypher queries linked to Query nodes
+- CypherAttempt/Response: Audit trail
 
 See docs/data_model.md for full schema documentation.
 """
@@ -168,8 +168,12 @@ class Neo4jClient:
         Returns:
             List of similar query dictionaries with:
             - id, text, score: Query info
-            - few_shot_cypher: Approved Cypher template (if exists)
+            - few_shot_cypher: Approved Cypher template (REQUIRED - approved queries must have FewShot)
+            - few_shot_params: Parameter names for the template
             - tool_name, tool_description: Recommended tool (if exists)
+            
+        Note: Only returns approved Query nodes that have a FewShot linked via FEW_SHOT_EXAMPLE.
+              This enforces the data integrity constraint that approved queries must have FewShot.
         """
         logger.debug(f"Searching for similar queries (k={k}, threshold={self.similarity_threshold})")
         with self.driver.session() as session:
@@ -178,7 +182,7 @@ class Neo4jClient:
                     CALL db.index.vector.queryNodes('query_embeddings', $k, $embedding)
                     YIELD node, score
                     WHERE node.status = 'approved' AND score >= $threshold
-                    OPTIONAL MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs)
+                    MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs:FewShot)
                     OPTIONAL MATCH (node)-[:USES_TOOL]->(tool:Tool)
                     RETURN node.id as id,
                            node.text as text,
@@ -494,7 +498,7 @@ class Neo4jClient:
         with self.driver.session() as session:
             result = session.run("""
                 MATCH (q:Query)
-                WHERE q.status IN ['pending_approval', 'declined', 'rejected', 'needs_review', 'needs_human_support']
+                WHERE q.status IN ['pending_approval', 'declined', 'rejected', 'needs_review', 'needs_human_support', 'approved']
                 OPTIONAL MATCH (q)-[:GENERATED]->(c:CypherAttempt)
                 WHERE c.success = true
                 OPTIONAL MATCH (c)-[:PRODUCED]->(r:Response)
@@ -508,7 +512,6 @@ class Neo4jClient:
                        c.id as cypher_id,
                        c.cypher_text as cypher_text,
                        c.refined_cypher as refined_cypher,
-                       c.question_template as question_template,
                        c.category as category,
                        c.parameters as parameters,
                        c.refinement_success as refinement_success,
@@ -578,54 +581,18 @@ class Neo4jClient:
             """, query_id=query_id)
 
     # =========================================================================
-    # NEW DATA MODEL (v2) - UserQuestion, QueryTemplate, FewShotCypher
+    # DATA MODEL - UserQuestion, Query, FewShot
     # =========================================================================
     
     def ensure_template_indexes(self):
-        """Create vector indexes for the new data model if they don't exist."""
-        logger.info("Ensuring template indexes exist")
-        with self.driver.session() as session:
-            # Vector index for QueryTemplate matching
-            try:
-                session.run("""
-                    CREATE VECTOR INDEX query_template_embeddings IF NOT EXISTS
-                    FOR (qt:QueryTemplate) ON (qt.embedding)
-                    OPTIONS {indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }}
-                """)
-                logger.debug("QueryTemplate vector index ensured")
-            except Exception as e:
-                logger.warning(f"Could not create QueryTemplate index: {e}")
-            
-            # Vector index for UserQuestion (fallback)
-            try:
-                session.run("""
-                    CREATE VECTOR INDEX user_question_embeddings IF NOT EXISTS
-                    FOR (uq:UserQuestion) ON (uq.embedding)
-                    OPTIONS {indexConfig: {
-                        `vector.dimensions`: 1536,
-                        `vector.similarity_function`: 'cosine'
-                    }}
-                """)
-                logger.debug("UserQuestion vector index ensured")
-            except Exception as e:
-                logger.warning(f"Could not create UserQuestion index: {e}")
-            
-            # Regular indexes
-            try:
-                session.run("""
-                    CREATE INDEX user_question_status IF NOT EXISTS
-                    FOR (uq:UserQuestion) ON (uq.status)
-                """)
-                session.run("""
-                    CREATE INDEX query_template_category IF NOT EXISTS
-                    FOR (qt:QueryTemplate) ON (qt.category)
-                """)
-                logger.debug("Regular indexes ensured")
-            except Exception as e:
-                logger.warning(f"Could not create regular indexes: {e}")
+        """Create indexes for the data model if they don't exist.
+        
+        Note: Query embeddings index is created in ensure_indexes().
+        This method is kept for backward compatibility.
+        """
+        logger.info("Ensuring indexes exist (Query embeddings index created in ensure_indexes())")
+        # Query embeddings index is handled in ensure_indexes()
+        # No additional indexes needed here
     
     def store_user_question(
         self,
@@ -675,144 +642,38 @@ class Neo4jClient:
         logger.info(f"Stored UserQuestion with ID: {question_id}")
         return question_id
     
-    def store_query_template(
-        self,
-        template: str,
-        category: str,
-        embedding: List[float],
-        parameters: List[str],
-        status: str = "approved"
-    ) -> str:
-        """Store a new query template.
-        
-        Args:
-            template: Parameterized question template
-            category: Question category
-            embedding: Vector embedding of template
-            parameters: List of parameter names
-            status: Template status (approved, pending_approval)
-            
-        Returns:
-            Generated QueryTemplate ID
-        """
-        template_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
-        
-        logger.debug(f"Storing QueryTemplate (category={category}, status={status})")
-        with self.driver.session() as session:
-            # Note: use 'params' dict to avoid conflict with neo4j's 'parameters' kwarg
-            session.run("""
-                CREATE (qt:QueryTemplate {
-                    id: $id,
-                    template: $template,
-                    category: $category,
-                    embedding: $embedding,
-                    parameters: $param_list,
-                    status: $status,
-                    created_at: $created_at,
-                    example_count: 1
-                })
-            """, {
-                "id": template_id,
-                "template": template,
-                "category": category,
-                "embedding": embedding,
-                "param_list": parameters,
-                "status": status,
-                "created_at": timestamp
-            })
-        
-        logger.info(f"Stored QueryTemplate with ID: {template_id} (status={status})")
-        return template_id
-    
-    def store_few_shot_cypher(
-        self,
-        template_id: str,
-        cypher_template: str,
-        parameters: List[str],
-        refinement_attempts: int = 1,
-        source_question_id: Optional[str] = None
-    ) -> str:
-        """Store a few-shot Cypher template and link to QueryTemplate.
-        
-        Args:
-            template_id: ID of the QueryTemplate to link to
-            cypher_template: Parameterized Cypher query
-            parameters: List of parameter names used
-            refinement_attempts: How many attempts the agent took
-            source_question_id: ID of UserQuestion that generated this
-            
-        Returns:
-            Generated FewShotCypher ID
-        """
-        cypher_id = str(uuid.uuid4())
-        timestamp = datetime.utcnow().isoformat()
-        
-        logger.debug(f"Storing FewShotCypher for template {template_id}")
-        with self.driver.session() as session:
-            # Create FewShotCypher and link to QueryTemplate
-            # Note: use dict to avoid conflict with neo4j's 'parameters' kwarg
-            session.run("""
-                MATCH (qt:QueryTemplate {id: $template_id})
-                CREATE (fs:FewShotCypher {
-                    id: $id,
-                    cypher_template: $cypher_template,
-                    parameters: $param_list,
-                    refinement_attempts: $refinement_attempts,
-                    verified: true,
-                    created_at: $created_at
-                })
-                CREATE (qt)-[:FEW_SHOT_EXAMPLE]->(fs)
-            """, {
-                "template_id": template_id,
-                "id": cypher_id,
-                "cypher_template": cypher_template,
-                "param_list": parameters,
-                "refinement_attempts": refinement_attempts,
-                "created_at": timestamp
-            })
-            
-            # If source question provided, link it
-            if source_question_id:
-                session.run("""
-                    MATCH (fs:FewShotCypher {id: $cypher_id})
-                    MATCH (uq:UserQuestion {id: $question_id})
-                    CREATE (fs)-[:REFINED_FROM]->(uq)
-                """, cypher_id=cypher_id, question_id=source_question_id)
-        
-        logger.info(f"Stored FewShotCypher with ID: {cypher_id}")
-        return cypher_id
-    
     def find_similar_templates(
         self,
         embedding: List[float],
         k: int = 5,
         threshold: float = None
     ) -> List[Dict[str, Any]]:
-        """Find similar QueryTemplates using vector similarity search.
+        """Find similar Query nodes with FewShot examples for refinement context.
+        
+        This is a compatibility method that uses Query nodes instead of QueryTemplate.
         
         Args:
             embedding: Query embedding vector
-            k: Number of similar templates to return
+            k: Number of similar queries to return
             threshold: Similarity threshold (uses default if not provided)
             
         Returns:
-            List of similar template dictionaries with scores
+            List of similar query dictionaries with scores and FewShot info
         """
         threshold = threshold or self.similarity_threshold
-        logger.debug(f"Searching for similar templates (k={k}, threshold={threshold})")
+        logger.debug(f"Searching for similar queries for refinement context (k={k}, threshold={threshold})")
         
         with self.driver.session() as session:
             try:
                 result = session.run("""
-                    CALL db.index.vector.queryNodes('query_template_embeddings', $k, $embedding)
+                    CALL db.index.vector.queryNodes('query_embeddings', $k, $embedding)
                     YIELD node, score
                     WHERE score >= $threshold AND node.status = 'approved'
-                    OPTIONAL MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs:FewShotCypher)
+                    OPTIONAL MATCH (node)-[:FEW_SHOT_EXAMPLE]->(fs:FewShot)
                     RETURN node.id as id,
-                           node.template as template,
+                           node.text as template,
                            node.category as category,
-                           node.parameters as parameters,
+                           fs.parameters as parameters,
                            fs.cypher_template as cypher_template,
                            fs.parameters as cypher_parameters,
                            score
@@ -820,62 +681,28 @@ class Neo4jClient:
                 """, k=k, embedding=embedding, threshold=threshold)
                 
                 templates = [dict(record) for record in result]
-                logger.info(f"Found {len(templates)} similar approved templates")
+                logger.info(f"Found {len(templates)} similar approved queries for refinement context")
                 if templates:
                     logger.debug(f"Top match score: {templates[0]['score']:.4f}")
                 return templates
             except Exception as e:
-                logger.warning(f"Template vector search failed: {e}")
+                logger.warning(f"Query vector search for refinement context failed: {e}")
                 return []
     
     def get_existing_categories(self) -> List[str]:
-        """Get list of existing question categories.
+        """Get list of existing question categories from Query nodes.
         
         Returns:
             List of category names in use
         """
         with self.driver.session() as session:
             result = session.run("""
-                MATCH (qt:QueryTemplate)
-                WHERE qt.category IS NOT NULL
-                RETURN DISTINCT qt.category as category
+                MATCH (q:Query)
+                WHERE q.category IS NOT NULL
+                RETURN DISTINCT q.category as category
                 ORDER BY category
             """)
             return [record['category'] for record in result]
-    
-    def link_question_to_template(
-        self,
-        question_id: str,
-        template_id: str,
-        similarity_score: float,
-        is_instance: bool = False
-    ):
-        """Link a UserQuestion to a QueryTemplate.
-        
-        Args:
-            question_id: UserQuestion ID
-            template_id: QueryTemplate ID
-            similarity_score: Similarity score
-            is_instance: Whether this question is an approved instance of the template
-        """
-        logger.debug(f"Linking question {question_id} to template {template_id}")
-        with self.driver.session() as session:
-            # Create SIMILAR relationship
-            session.run("""
-                MATCH (uq:UserQuestion {id: $question_id})
-                MATCH (qt:QueryTemplate {id: $template_id})
-                MERGE (uq)-[r:SIMILAR]->(qt)
-                SET r.score = $score
-            """, question_id=question_id, template_id=template_id, score=similarity_score)
-            
-            # If approved, also create INSTANCE_OF and update counter
-            if is_instance:
-                session.run("""
-                    MATCH (uq:UserQuestion {id: $question_id})
-                    MATCH (qt:QueryTemplate {id: $template_id})
-                    MERGE (uq)-[:INSTANCE_OF]->(qt)
-                    SET qt.example_count = coalesce(qt.example_count, 0) + 1
-                """, question_id=question_id, template_id=template_id)
     
     def update_user_question_status(
         self,

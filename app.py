@@ -145,7 +145,6 @@ if submit_button and user_query.strip():
                         "text2cypher": "⚡ Text2Cypher (natural language to Cypher)",
                         "agentic_text2cypher": "🤖 Agentic Text2Cypher (Deep Agent)"
                     }.get(tool_used, f"🔧 {tool_used}")
-                    st.caption(f"Tool used: {tool_display}")
                 
                 # Display answer
                 st.markdown("### Answer")

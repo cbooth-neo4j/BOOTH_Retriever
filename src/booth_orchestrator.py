@@ -1,15 +1,15 @@
 """Main BOOTH orchestrator implementing the complete flow logic.
 
-Updated for v2 data model (see docs/data_model.md):
-- UserQuestion: Individual user questions with embeddings
-- QueryTemplate: Parameterized question patterns for instant matching
-- FewShotCypher: Approved parameterized Cypher queries
+Data model (see docs/data_model.md):
+- UserQuestion: Individual user questions (verbatim)
+- Query: Canonical question patterns with embeddings for similarity matching
+- FewShot: Approved parameterized Cypher queries linked to Query nodes
 
 Flow:
-1. Check QueryTemplates for instant execution (>90% similarity)
-   - If match: Extract params, run parameterized Cypher, NO LLM NEEDED
-2. If no template match, run agentic exploration
-3. On approval: Trigger refinement agent to create template
+1. Check for similar approved Query nodes (>90% similarity)
+   - If match with FewShot: Extract params, run parameterized Cypher (2 LLM calls)
+2. If no match, run agentic exploration
+3. On approval: Trigger refinement agent to create FewShot linked to Query
 """
 
 import os
@@ -155,90 +155,6 @@ class BOOTHOrchestrator:
                 error_message=str(e)
             )
     
-    def _handle_template_match(
-        self,
-        user_query: str,
-        embedding: List[float],
-        template_match: Dict[str, Any],
-        is_high_risk: bool
-    ) -> BOOTHResponse:
-        """Handle instant execution via matched QueryTemplate.
-        
-        This is the FAST PATH - no LLM inference needed!
-        We extract parameters and run the pre-approved Cypher directly.
-        """
-        logger.info("INSTANT EXECUTION: Using matched template (no LLM needed)")
-        
-        try:
-            # Extract parameters from user query using LLM
-            extracted_params = self._extract_parameters(
-                user_query=user_query,
-                template=template_match['template'],
-                parameters=template_match.get('parameters', [])
-            )
-            
-            if not extracted_params:
-                logger.warning("Could not extract parameters, falling back to agentic mode")
-                return self._handle_new_query(user_query, embedding)
-            
-            # Build the parameterized Cypher
-            cypher_template = template_match['cypher_template']
-            cypher_params = template_match.get('cypher_parameters', [])
-            
-            # Execute the Cypher with extracted parameters
-            success, result_data, error = self._execute_parameterized_cypher(
-                cypher_template=cypher_template,
-                params=extracted_params
-            )
-            
-            if not success:
-                logger.warning(f"Template execution failed: {error}, falling back to agentic mode")
-                return self._handle_new_query(user_query, embedding)
-            
-            # Generate a summary from the results
-            summary = self._summarize_results(user_query, result_data)
-            
-            # Store the UserQuestion (new model)
-            try:
-                question_id = self.neo4j_client.store_user_question(
-                    text=user_query,
-                    embedding=embedding,
-                    status="approved",  # Auto-approved since we used a template
-                    risk_level="low",
-                    extracted_params=extracted_params
-                )
-                
-                # Link to the template
-                self.neo4j_client.link_question_to_template(
-                    question_id=question_id,
-                    template_id=template_match['id'],
-                    similarity_score=template_match['score'],
-                    is_instance=False  # Not a defining instance, just a usage
-                )
-            except Exception as e:
-                logger.warning(f"Could not store UserQuestion: {e}")
-                question_id = None
-            
-            logger.info(f"Instant execution successful (category: {template_match.get('category')})")
-            
-            return BOOTHResponse(
-                success=True,
-                answer=summary,
-                query_id=question_id,
-                similar_match=True,
-                high_risk=is_high_risk,
-                declined=False,
-                cypher_used=cypher_template,
-                raw_data=result_data,
-                tool_used="template_instant",  # New tool type for tracking
-                pending_feedback=False  # No feedback needed for template matches
-            )
-            
-        except Exception as e:
-            logger.error(f"Template execution error: {e}", exc_info=True)
-            # Fall back to agentic mode
-            return self._handle_new_query(user_query, embedding)
-    
     def _extract_parameters(
         self,
         user_query: str,
@@ -274,7 +190,7 @@ Only return the JSON object, nothing else."""
                 model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=200
+                max_completion_tokens=200
             )
             
             result_text = response.choices[0].message.content.strip()
@@ -288,6 +204,68 @@ Only return the JSON object, nothing else."""
             
         except Exception as e:
             logger.warning(f"Parameter extraction failed: {e}")
+            return None
+    
+    def _extract_cypher_parameters(
+        self,
+        user_query: str,
+        cypher_template: str,
+        parameter_names: List[str],
+        matched_query_text: str
+    ) -> Optional[Dict[str, Any]]:
+        """Extract parameter values from user query for Cypher parameters.
+        
+        This is a simpler extraction focused on entity names and values needed
+        for Cypher queries. Used for high-risk queries with similar matches.
+        
+        Args:
+            user_query: The actual user question
+            cypher_template: The parameterized Cypher query
+            parameter_names: List of parameter names (e.g., ["entity1", "entity2"])
+            matched_query_text: The original query text that this template was derived from
+            
+        Returns:
+            Dict of parameter values or None if extraction failed
+        """
+        if not parameter_names:
+            return {}
+        
+        prompt = f"""Extract parameter values from the user question to fill in the Cypher query parameters.
+
+Original similar question: {matched_query_text}
+Cypher query template: {cypher_template}
+Parameters needed: {', '.join(parameter_names)}
+User question: {user_query}
+
+Your task: Extract the entity names, values, or search terms from the user question that correspond to each parameter.
+
+For example, if the Cypher has $entity1 and $entity2, and the question asks about "Badly Drawn Boy" and "Wolf Alice", extract:
+{{"entity1": "Badly Drawn Boy", "entity2": "Wolf Alice"}}
+
+For array parameters (like $search_terms), extract as an array:
+{{"search_terms": ["term1", "term2"]}}
+
+Return ONLY a JSON object with the parameter values. No explanation, just the JSON."""
+
+        try:
+            # Use the simple responses.create() API (cleaner than chat.completions)
+            model = os.getenv("OPENAI_CHAT_MODEL", "gpt-5-mini")
+            response = self.llm_client.client.responses.create(
+                model=model,
+                input=prompt
+            )
+            result_text = response.output_text.strip()
+            
+            # Parse JSON from response (handle both single and multi-line JSON)
+            import re
+            # Try to find JSON object (handles nested objects and arrays)
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(result_text)
+            
+        except Exception as e:
+            logger.warning(f"Cypher parameter extraction failed: {e}")
             return None
     
     def _execute_parameterized_cypher(
@@ -334,13 +312,13 @@ Results:
 Provide a direct, factual answer based on the data. Be specific and cite relevant details."""
 
         try:
-            response = self.llm_client.client.chat.completions.create(
-                model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=500
+            # Use the simple responses.create() API (cleaner than chat.completions)
+            model = os.getenv("OPENAI_CHAT_MODEL", "gpt-5-mini")
+            response = self.llm_client.client.responses.create(
+                model=model,
+                input=prompt
             )
-            return response.choices[0].message.content.strip()
+            return response.output_text.strip()
         except Exception as e:
             logger.warning(f"Summarization failed: {e}")
             return f"Found {len(result_data)} results. Raw data: {results_text[:500]}..."
@@ -356,7 +334,9 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
         
         New flow (v3):
         1. Store UserQuestion linked to matched Query via SIMILAR
-        2. If Query has FewShot cypher, execute it directly (instant path)
+        2. If Query has FewShot cypher:
+           - For high-risk queries: Use simple pipeline (extract params → execute → summarize) - 2 LLM calls
+           - For low-risk queries: Try instant execution, fall back to agent if needed
         3. Fall back to agent with context if no FewShot or execution fails
         """
         best_match = similar_queries[0]
@@ -373,37 +353,142 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
         
         # Check if matched Query has a FewShot cypher for instant execution
         few_shot_cypher = best_match.get('few_shot_cypher')
+        few_shot_params = best_match.get('few_shot_params', [])
+        
+        logger.debug(f"FewShot check: cypher={few_shot_cypher is not None}, params={few_shot_params}")
         
         if few_shot_cypher:
-            logger.info("INSTANT PATH: Using FewShot cypher from matched Query")
-            
-            # Execute the FewShot cypher directly
-            success, result_data, error = self._execute_parameterized_cypher(
-                cypher_template=few_shot_cypher,
-                params={}  # TODO: Extract params from user query if parameterized
-            )
-            
-            if success:
-                # Generate summary from results
+            # For high-risk queries with a match, use the simpler pipeline (2 LLM calls)
+            if is_high_risk:
+                logger.info("HIGH-RISK SIMPLE PATH: Extract params → Execute → Summarize (2 LLM calls)")
+                
+                # Step 1: Extract parameters from user query (1st LLM call)
+                if few_shot_params:
+                    # Parse parameter names if stored as JSON string
+                    if isinstance(few_shot_params, str):
+                        try:
+                            parameter_names = json.loads(few_shot_params)
+                        except:
+                            parameter_names = few_shot_params if isinstance(few_shot_params, list) else []
+                    else:
+                        parameter_names = few_shot_params
+                    
+                    extracted_params = self._extract_cypher_parameters(
+                        user_query=user_query,
+                        cypher_template=few_shot_cypher,
+                        parameter_names=parameter_names,
+                        matched_query_text=best_match['text']
+                    )
+                    
+                    if not extracted_params:
+                        logger.warning("Parameter extraction failed, falling back to agent")
+                        return self._fallback_to_agent(user_query, embedding, similar_queries, best_match, is_high_risk, user_question_id)
+                else:
+                    # No parameters needed
+                    extracted_params = {}
+                
+                # Step 2: Execute the parameterized Cypher
+                success, result_data, error = self._execute_parameterized_cypher(
+                    cypher_template=few_shot_cypher,
+                    params=extracted_params
+                )
+                
+                if not success:
+                    logger.warning(f"Cypher execution failed: {error}, falling back to agent")
+                    return self._fallback_to_agent(user_query, embedding, similar_queries, best_match, is_high_risk, user_question_id)
+                
+                # Step 3: Summarize results (2nd LLM call)
                 summary = self._summarize_results(user_query, result_data)
                 
-                logger.info(f"Instant execution successful (query_id: {user_question_id})")
+                logger.info(f"Simple pipeline successful (using approved query {best_match['id']}, 2 LLM calls)")
+                
+                # Since we're using an already approved query's template, use the existing approved Query ID
+                # Don't create a new Query node that needs approval - the template is already approved
+                approved_query_id = best_match['id']
+                
+                # Store the Cypher attempt linked to the existing approved Query
+                cypher_attempt_id = self.neo4j_client.store_cypher_attempt(
+                    query_id=approved_query_id,
+                    cypher_text=few_shot_cypher,
+                    attempt_number=1,
+                    success=True,
+                    error_message=None
+                )
+                
+                # Store the response
+                self.neo4j_client.store_response(
+                    cypher_attempt_id=cypher_attempt_id,
+                    result_data=json.dumps(result_data) if result_data else None,
+                    summary=summary
+                )
+                
+                # High-risk queries using approved query templates are safe to show
+                # since they're using a pre-approved pattern
                 return BOOTHResponse(
                     success=True,
                     answer=summary,
-                    query_id=user_question_id,
+                    query_id=approved_query_id,  # Use the approved query ID
                     similar_match=True,
                     high_risk=is_high_risk,
-                    declined=False,
+                    declined=False,  # Using approved template - safe to show
                     cypher_used=few_shot_cypher,
                     raw_data=result_data,
-                    tool_used="few_shot_instant",
-                    pending_feedback=True  # Still want user feedback
+                    tool_used="few_shot_simple",
+                    pending_feedback=True  # Still want feedback for tracking
                 )
             else:
-                logger.warning(f"FewShot execution failed: {error}, falling back to agent")
+                # Low-risk: Try instant execution first
+                logger.info("INSTANT PATH: Using FewShot cypher from matched Query")
+                
+                # Execute the FewShot cypher directly (may have no params)
+                success, result_data, error = self._execute_parameterized_cypher(
+                    cypher_template=few_shot_cypher,
+                    params={}
+                )
+                
+                if success:
+                    # Generate summary from results
+                    summary = self._summarize_results(user_query, result_data)
+                    
+                    logger.info(f"Instant execution successful (query_id: {user_question_id})")
+                    return BOOTHResponse(
+                        success=True,
+                        answer=summary,
+                        query_id=user_question_id,
+                        similar_match=True,
+                        high_risk=is_high_risk,
+                        declined=False,
+                        cypher_used=few_shot_cypher,
+                        raw_data=result_data,
+                        tool_used="few_shot_instant",
+                        pending_feedback=True  # Still want user feedback
+                    )
+                else:
+                    logger.warning(f"FewShot execution failed: {error}, falling back to agent")
         
-        # Fall back to agent with context from similar queries
+        # If we reach here, FewShot should exist (data integrity constraint)
+        # If it doesn't, that's a data integrity issue - log error and fall back to agent
+        if not few_shot_cypher:
+            logger.error(f"Data integrity issue: Approved Query {best_match['id']} has no FewShot! This should not happen.")
+            logger.error(f"Query text: '{best_match['text'][:100]}...', similarity: {best_match.get('score', 0.0):.4f}")
+            # Fall back to agent as last resort
+            return self._fallback_to_agent(user_query, embedding, similar_queries, best_match, is_high_risk, user_question_id)
+        
+        # This should never be reached if FewShot exists (handled above)
+        # But keeping as safety net
+        logger.warning(f"Unexpected state: FewShot check passed but no FewShot found")
+        return self._fallback_to_agent(user_query, embedding, similar_queries, best_match, is_high_risk, user_question_id)
+    
+    def _fallback_to_agent(
+        self,
+        user_query: str,
+        embedding: List[float],
+        similar_queries: List[Dict],
+        best_match: Dict,
+        is_high_risk: bool,
+        user_question_id: str
+    ) -> BOOTHResponse:
+        """Fall back to agentic pipeline when simple path fails."""
         logger.info("Using agent with few-shot context from similar queries")
         
         # For agent path, we still need a Query node to track the cypher attempts
@@ -417,6 +502,7 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
         
         # Build context for the agent
         few_shot_examples = []
+        few_shot_cypher = best_match.get('few_shot_cypher')
         for q in similar_queries:
             if q.get('few_shot_cypher'):
                 few_shot_examples.append({
@@ -587,39 +673,32 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
             if result.success:
                 logger.info(f"Background refinement successful for query {query_id}")
                 
-                # Create the template embedding from the parameterized template
-                template_embedding = self.llm_client.get_embedding(result.question_template)
+                # Use the original verbatim question text for similarity matching (not parameterized)
+                # Get the original question text from the Query node
+                with self.neo4j_client.driver.session() as session:
+                    query_record = session.run("""
+                        MATCH (q:Query {id: $query_id})
+                        RETURN q.text as question_text
+                    """, query_id=query_id).single()
+                    
+                    if not query_record:
+                        logger.error(f"Could not find Query node {query_id} for background refinement")
+                        return
+                    
+                    verbatim_question = query_record['question_text']
                 
-                # Store the QueryTemplate (but not yet approved - curator decides)
-                template_id = self.neo4j_client.store_query_template(
-                    template=result.question_template,
-                    category=result.category,
-                    embedding=template_embedding,
-                    parameters=result.parameters,
-                    status="pending_approval"  # Curator must approve
-                )
-                
-                # Store the FewShotCypher
-                self.neo4j_client.store_few_shot_cypher(
-                    template_id=template_id,
+                # Store the FewShot linked to the existing Query node
+                few_shot_id = self.neo4j_client.store_few_shot_for_query(
+                    query_id=query_id,
                     cypher_template=result.refined_cypher,
                     parameters=result.parameters,
-                    refinement_attempts=result.attempts,
-                    source_question_id=query_id
-                )
-                
-                # Link the original question to the template
-                self.neo4j_client.link_question_to_template(
-                    question_id=query_id,
-                    template_id=template_id,
-                    similarity_score=1.0,
-                    is_instance=True
+                    example_values={"category": result.category} if result.category else None
                 )
                 
                 # Update the cypher attempt with refined info
                 self._update_cypher_with_refinement(cypher_id, result)
                 
-                logger.info(f"Background refinement stored: template_id={template_id}, category={result.category}")
+                logger.info(f"Background refinement stored: few_shot_id={few_shot_id}, category={result.category}")
             else:
                 logger.warning(f"Background refinement failed for query {query_id}: {result.error}")
                 # Mark as needs human support so curator knows refinement failed
@@ -641,14 +720,12 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
                 session.run("""
                     MATCH (c:CypherAttempt {id: $cypher_id})
                     SET c.refined_cypher = $refined_cypher,
-                        c.question_template = $question_template,
                         c.category = $category,
                         c.parameters = $param_json,
                         c.refinement_success = true
                 """, {
                     "cypher_id": cypher_id,
                     "refined_cypher": refinement_result.refined_cypher,
-                    "question_template": refinement_result.question_template,
                     "category": refinement_result.category,
                     "param_json": parameters_json
                 })
@@ -874,42 +951,49 @@ Provide a direct, factual answer based on the data. Be specific and cite relevan
             )
             
             if result.success:
-                logger.info(f"Refinement successful for query {query_id}")
+                logger.info(f"Refinement successful for query {query_id} (retrieval_type={result.retrieval_type})")
                 
-                # Create the template embedding from the parameterized template
-                template_embedding = self.llm_client.get_embedding(result.question_template)
+                # Handle hybrid_search retrieval type
+                if result.retrieval_type == "hybrid_search":
+                    # For hybrid search, we don't create a Cypher template
+                    # Just mark the query as approved with hybrid search recommendation
+                    logger.info(f"Query {query_id} uses hybrid search - no Cypher template needed")
+                    return {
+                        "success": True,
+                        "retrieval_type": "hybrid_search",
+                        "category": result.category,
+                        "message": "Query can be answered with hybrid search - no Cypher template created"
+                    }
                 
-                # Store the QueryTemplate
-                template_id = self.neo4j_client.store_query_template(
-                    template=result.question_template,
-                    category=result.category,
-                    embedding=template_embedding,
-                    parameters=result.parameters
-                )
+                # Handle Cypher template creation
+                # Use the original verbatim question text for similarity matching (not parameterized)
+                # Get the original question text from the Query node
+                with self.neo4j_client.driver.session() as session:
+                    query_record = session.run("""
+                        MATCH (q:Query {id: $query_id})
+                        RETURN q.text as question_text
+                    """, query_id=query_id).single()
+                    
+                    if not query_record:
+                        logger.error(f"Could not find Query node {query_id}")
+                        return {"success": False, "error": "Query node not found"}
+                    
+                    verbatim_question = query_record['question_text']
                 
-                # Store the FewShotCypher
-                self.neo4j_client.store_few_shot_cypher(
-                    template_id=template_id,
+                # Store the FewShot linked to the existing Query node
+                few_shot_id = self.neo4j_client.store_few_shot_for_query(
+                    query_id=query_id,
                     cypher_template=result.refined_cypher,
                     parameters=result.parameters,
-                    refinement_attempts=result.attempts,
-                    source_question_id=query_id
-                )
-                
-                # Link the original question to the template
-                self.neo4j_client.link_question_to_template(
-                    question_id=query_id,
-                    template_id=template_id,
-                    similarity_score=1.0,
-                    is_instance=True
+                    example_values={"category": result.category} if result.category else None
                 )
                 
                 return {
                     "success": True,
-                    "template_id": template_id,
+                    "retrieval_type": "cypher",
+                    "few_shot_id": few_shot_id,
                     "category": result.category,
                     "refined_cypher": result.refined_cypher,
-                    "question_template": result.question_template,
                     "parameters": result.parameters,
                     "refinement_attempts": result.attempts
                 }

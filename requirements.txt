@@ -7,3 +7,6 @@ pandas>=2.0.0
 
 # Deep Agents for Agentic Text2Cypher
 deepagents>=0.1.0
+
+# Neo4j GraphRAG for hybrid retrieval
+neo4j-graphrag>=0.1.0
