@@ -45,6 +45,20 @@ st.markdown("""
 Review and approve queries to improve BOOTH's performance. Approved queries become few-shot examples for future similar questions.
 """)
 
+# Check if this is a new setup
+try:
+    with st.session_state.orchestrator.neo4j_client.driver.session() as session:
+        # Check for entities
+        result = session.run("MATCH (e:__Entity__) RETURN count(e) as count LIMIT 1")
+        entity_count = result.single()["count"]
+        
+        if entity_count == 0:
+            st.info("👋 No knowledge graph detected. Please complete setup first.")
+            st.page_link("pages/0_Setup.py", label="→ Go to Setup", icon="⚙️")
+            st.markdown("---")
+except Exception as e:
+    logger.warning(f"Could not check entity count: {e}")
+
 # Refresh button
 col1, col2, col3 = st.columns([1, 1, 4])
 with col1:
@@ -897,6 +911,12 @@ else:
 
 # Sidebar with guidance
 with st.sidebar:
+    st.header("Quick Navigation")
+    st.page_link("app.py", label="🔍 Query Interface")
+    st.page_link("pages/0_Setup.py", label="⚙️ Setup")
+    st.page_link("pages/2_Test_Set.py", label="📝 Test Set")
+    
+    st.markdown("---")
     st.header("Training Guidelines")
     st.markdown("""
     ### Tab Definitions

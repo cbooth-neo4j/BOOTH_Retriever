@@ -887,4 +887,114 @@ class Neo4jClient:
             deleted_counts['Tool'] = result.single()["count"]
         
         return deleted_counts
+    
+    def store_test_question(
+        self, 
+        question: str, 
+        expected_answer: str, 
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Store a test question in Neo4j.
+        
+        Args:
+            question: The test question text
+            expected_answer: The expected answer
+            metadata: Optional metadata (entity, entity_type, etc.)
+            
+        Returns:
+            The ID of the created TestQuestion node
+        """
+        logger.debug(f"Storing test question: {question[:50]}...")
+        
+        with self.driver.session() as session:
+            test_id = f"test_{uuid.uuid4().hex[:12]}"
+            
+            query = """
+                CREATE (tq:TestQuestion {
+                    id: $test_id,
+                    question: $question,
+                    expected_answer: $expected_answer,
+                    created_at: datetime(),
+                    metadata: $metadata
+                })
+                RETURN tq.id as id
+            """
+            
+            result = session.run(
+                query,
+                test_id=test_id,
+                question=question,
+                expected_answer=expected_answer,
+                metadata=json.dumps(metadata or {})
+            )
+            
+            created_id = result.single()["id"]
+            logger.info(f"Stored test question with ID: {created_id}")
+            return created_id
+    
+    def get_test_questions(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Retrieve test questions from Neo4j.
+        
+        Args:
+            limit: Optional limit on number of questions to return
+            
+        Returns:
+            List of test question dicts
+        """
+        logger.debug(f"Retrieving test questions (limit: {limit})")
+        
+        with self.driver.session() as session:
+            query = """
+                MATCH (tq:TestQuestion)
+                RETURN tq.id as id,
+                       tq.question as question,
+                       tq.expected_answer as expected_answer,
+                       tq.created_at as created_at,
+                       tq.metadata as metadata
+                ORDER BY tq.created_at DESC
+            """
+            
+            if limit:
+                query += f" LIMIT {limit}"
+            
+            result = session.run(query)
+            
+            questions = []
+            for record in result:
+                metadata = record["metadata"]
+                if metadata and isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                
+                questions.append({
+                    'id': record['id'],
+                    'question': record['question'],
+                    'expected_answer': record['expected_answer'],
+                    'created_at': record['created_at'],
+                    'metadata': metadata or {}
+                })
+            
+            logger.info(f"Retrieved {len(questions)} test questions")
+            return questions
+    
+    def delete_test_questions(self) -> int:
+        """Delete all test questions from Neo4j.
+        
+        Returns:
+            Number of test questions deleted
+        """
+        logger.info("Deleting all test questions")
+        
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (tq:TestQuestion)
+                DETACH DELETE tq
+                RETURN count(tq) as count
+            """)
+            
+            count = result.single()["count"]
+            logger.info(f"Deleted {count} test questions")
+            return count
 

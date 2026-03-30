@@ -21,6 +21,11 @@ st.set_page_config(
 )
 
 # Initialize session state
+if 'graph_built' not in st.session_state:
+    st.session_state.graph_built = False
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = None
+
 if 'orchestrator' not in st.session_state:
     try:
         logger.info("Initializing BOOTH Orchestrator")
@@ -66,6 +71,33 @@ st.markdown("""
 - **Hard:** Are the Laleli Mosque and Esma Sultan Mansion located in the same neighborhood?
 - **Approved:** Which performance act has a higher instrument to person ratio, Badly Drawn Boy or Wolf Alice?
 """)
+
+# Check if graph is built - show welcome message for new users
+try:
+    with st.session_state.orchestrator.neo4j_client.driver.session() as session:
+        result = session.run("MATCH (n) RETURN count(n) as count LIMIT 1")
+        node_count = result.single()["count"]
+        
+        if node_count == 0:
+            st.info("👋 **Welcome to BOOTH Retriever!** It looks like you're new here. Please complete the setup to get started.")
+            st.page_link("pages/0_Setup.py", label="→ Go to Setup", icon="⚙️")
+            st.markdown("---")
+            st.markdown("### What is BOOTH?")
+            st.markdown("""
+            BOOTH (Bounded Orchestration Of Text Handling) is an intelligent knowledge graph retrieval system that:
+            - Learns from your approved queries to provide faster, more accurate responses
+            - Uses agentic reasoning to explore complex questions
+            - Improves over time through human feedback
+            
+            **Get Started:**
+            1. **Setup** - Connect your data (files, folders, or Neo4j database)
+            2. **Train AI** - Review and approve queries to build the knowledge base
+            3. **Query** - Ask questions and get intelligent answers
+            """)
+            st.stop()
+except Exception as e:
+    logger.warning(f"Could not check graph status: {e}")
+    # Continue anyway - let the user try to query
 
 # Sidebar with info
 with st.sidebar:
