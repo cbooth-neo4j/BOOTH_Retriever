@@ -14,6 +14,13 @@ misses to the curation queue.
 
 from __future__ import annotations
 
+from .curator import (
+    ApprovalResult,
+    BOOTHCurator,
+    CuratorStats,
+    PendingQuery,
+    QueryDetail,
+)
 from .models import BOOTHResponse
 from .retriever import BOOTHRetriever
 from .schema import SchemaInitResult, init_schema
@@ -27,30 +34,8 @@ __all__ = [
     "BOOTHResponse",
     "SchemaInitResult",
     "init_schema",
+    "ApprovalResult",
+    "CuratorStats",
+    "PendingQuery",
+    "QueryDetail",
 ]
-
-
-class _NotImplementedStub:
-    """Placeholder until the real class is ported.
-
-    Raises a clear error on instantiation so smoke tests can still verify
-    that the symbol is importable without accidentally succeeding on a
-    broken implementation.
-    """
-
-    _name: str = "stub"
-
-    def __init__(self, *args, **kwargs) -> None:
-        raise NotImplementedError(
-            f"{self._name} has not been ported yet. "
-            "See packages/booth-retriever/ TODOs in the plan."
-        )
-
-
-class BOOTHCurator(_NotImplementedStub):
-    """Python API for listing, approving, rejecting and editing pending queries.
-
-    Stub in MV1. Will be implemented in the curator port.
-    """
-
-    _name = "BOOTHCurator"
