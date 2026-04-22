@@ -13,6 +13,8 @@ the port from the parent repository progresses. See the plan document at
 
 from __future__ import annotations
 
+from .schema import SchemaInitResult, init_schema
+
 __version__ = "0.0.1"
 
 __all__ = [
@@ -20,6 +22,7 @@ __all__ = [
     "BOOTHRetriever",
     "BOOTHCurator",
     "BOOTHResponse",
+    "SchemaInitResult",
     "init_schema",
 ]
 
@@ -107,13 +110,4 @@ class BOOTHResponse:
         self.pending_feedback = pending_feedback
 
 
-def init_schema(driver) -> None:  # noqa: ARG001 - stub
-    """Idempotently create BOOTH's Neo4j schema (indexes, constraints).
-
-    Currently a stub; will be implemented during the schema port. The real
-    implementation will run the DDL documented in ``docs/data_model.md``.
-    """
-    raise NotImplementedError(
-        "init_schema has not been ported yet. "
-        "See packages/booth-retriever/ TODO 'schema' in the plan."
-    )
+# init_schema is re-exported from .schema; see that module for the implementation.

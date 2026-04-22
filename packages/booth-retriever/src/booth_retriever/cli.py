@@ -7,9 +7,12 @@ NotImplementedError until the underlying APIs are ported.
 
 from __future__ import annotations
 
+import os
+
 import typer
 
 from . import __version__
+from .schema import init_schema as _init_schema
 
 app = typer.Typer(
     name="booth",
@@ -48,9 +51,68 @@ def _main(
 
 
 @app.command()
-def init() -> None:
+def init(
+    uri: str = typer.Option(
+        None,
+        "--uri",
+        envvar="NEO4J_URI",
+        help="Neo4j bolt URI. Defaults to NEO4J_URI env var.",
+    ),
+    user: str = typer.Option(
+        "neo4j",
+        "--user",
+        envvar="NEO4J_USER",
+        help="Neo4j username. Defaults to NEO4J_USER env var, then 'neo4j'.",
+    ),
+    password: str = typer.Option(
+        None,
+        "--password",
+        envvar="NEO4J_PASSWORD",
+        help="Neo4j password. Defaults to NEO4J_PASSWORD env var.",
+    ),
+    database: str = typer.Option(
+        None,
+        "--database",
+        envvar="NEO4J_DATABASE",
+        help="Neo4j database name for multi-database setups (optional).",
+    ),
+    embedding_dimensions: int = typer.Option(
+        1536,
+        "--dimensions",
+        "-d",
+        envvar="EMBEDDING_DIMENSIONS",
+        help="Vector dimensions for the embedder you'll use. Must match.",
+    ),
+) -> None:
     """Bootstrap BOOTH's Neo4j schema (indexes, constraints). Idempotent."""
-    raise NotImplementedError("booth init: not yet wired up")
+    from neo4j import GraphDatabase
+
+    resolved_uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    if not password:
+        typer.echo("Error: Neo4j password required (--password or NEO4J_PASSWORD).", err=True)
+        raise typer.Exit(code=2)
+
+    driver = GraphDatabase.driver(resolved_uri, auth=(user, password))
+    try:
+        result = _init_schema(
+            driver,
+            embedding_dimensions=embedding_dimensions,
+            database=database,
+        )
+    finally:
+        driver.close()
+
+    if result.created:
+        typer.echo(f"Created {len(result.created)} schema object(s):")
+        for name in result.created:
+            typer.echo(f"  + {name}")
+    if result.already_existed:
+        typer.echo(f"{len(result.already_existed)} schema object(s) already existed:")
+        for name in result.already_existed:
+            typer.echo(f"  . {name}")
+    typer.echo(
+        f"Vector index configured for {result.embedding_dimensions}-dim embeddings."
+    )
 
 
 @app.command()

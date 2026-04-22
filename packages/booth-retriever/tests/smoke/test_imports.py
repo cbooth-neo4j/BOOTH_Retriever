@@ -50,9 +50,16 @@ def test_stub_classes_raise_until_ported() -> None:
 
 
 def test_init_schema_is_a_function() -> None:
-    """init_schema is importable and callable (stub raises until ported)."""
+    """init_schema is importable and callable."""
     from booth_retriever import init_schema
 
     assert callable(init_schema)
-    with pytest.raises(NotImplementedError):
-        init_schema(driver=None)
+
+
+def test_schema_init_result_is_exported() -> None:
+    """SchemaInitResult is part of the public surface."""
+    from booth_retriever import SchemaInitResult
+
+    r = SchemaInitResult()
+    assert r.created == []
+    assert r.already_existed == []
