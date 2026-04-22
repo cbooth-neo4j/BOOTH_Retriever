@@ -38,15 +38,26 @@ def test_boothresponse_is_constructible() -> None:
     assert r.query_id == "abc"
 
 
-def test_stub_classes_raise_until_ported() -> None:
-    """Stubs for un-ported classes fail loudly, not silently."""
-    from booth_retriever import BOOTHCurator, BOOTHRetriever
+def test_remaining_stub_classes_raise_until_ported() -> None:
+    """Stubs for un-ported classes fail loudly, not silently.
 
-    with pytest.raises(NotImplementedError, match="BOOTHRetriever"):
-        BOOTHRetriever()  # type: ignore[call-arg]
+    BOOTHRetriever is now a real class so it's excluded; the instantiation
+    test for it lives in tests/unit/test_retriever.py where we can pass a
+    real driver fixture.
+    """
+    from booth_retriever import BOOTHCurator
 
     with pytest.raises(NotImplementedError, match="BOOTHCurator"):
         BOOTHCurator()  # type: ignore[call-arg]
+
+
+def test_boothretriever_class_is_a_retriever_subclass() -> None:
+    """BOOTHRetriever is a real neo4j-graphrag Retriever subclass."""
+    from neo4j_graphrag.retrievers.base import Retriever
+
+    from booth_retriever import BOOTHRetriever
+
+    assert issubclass(BOOTHRetriever, Retriever)
 
 
 def test_init_schema_is_a_function() -> None:
