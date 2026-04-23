@@ -1,0 +1,156 @@
+/* =============================================================================
+   Neo4j Brand Palettes
+   All base color shades as CSS custom properties.
+   Source of truth: ../colors/COLORS.md
+   ============================================================================= */
+
+:root {
+    /* ── Baltic (Brand Primary) ── */
+    --neo4j-baltic-10: #e7fafb;
+    --neo4j-baltic-15: #c3f8fb;
+    --neo4j-baltic-20: #8fe3e8;
+    --neo4j-baltic-25: #5cc3c9;
+    --neo4j-baltic-30: #5db3bf;
+    --neo4j-baltic-35: #51a6b1;
+    --neo4j-baltic-40: #4c99a4;
+    --neo4j-baltic-45: #30839d;
+    --neo4j-baltic-50: #0a6190;
+    --neo4j-baltic-55: #02507b;
+    --neo4j-baltic-60: #014063;
+    --neo4j-baltic-65: #262f31;
+    --neo4j-baltic-70: #081e2b;
+    --neo4j-baltic-75: #041823;
+    --neo4j-baltic-80: #01121c;
+
+    /* ── Hibiscus ── */
+    --neo4j-hibiscus-10: #ffe9e7;
+    --neo4j-hibiscus-15: #ffd7d2;
+    --neo4j-hibiscus-20: #ffaa97;
+    --neo4j-hibiscus-25: #ff8e6a;
+    --neo4j-hibiscus-30: #f96746;
+    --neo4j-hibiscus-35: #e84e2c;
+    --neo4j-hibiscus-40: #d43300;
+    --neo4j-hibiscus-45: #bb2d00;
+    --neo4j-hibiscus-50: #961200;
+    --neo4j-hibiscus-55: #730e00;
+    --neo4j-hibiscus-60: #432520;
+    --neo4j-hibiscus-65: #4e0900;
+    --neo4j-hibiscus-70: #3f0800;
+    --neo4j-hibiscus-75: #360700;
+    --neo4j-hibiscus-80: #280500;
+
+    /* ── Forest ── */
+    --neo4j-forest-10: #e7fcd7;
+    --neo4j-forest-15: #bcf194;
+    --neo4j-forest-20: #90cb62;
+    --neo4j-forest-25: #80bb53;
+    --neo4j-forest-30: #6fa646;
+    --neo4j-forest-35: #5b992b;
+    --neo4j-forest-40: #4d8622;
+    --neo4j-forest-45: #3f7824;
+    --neo4j-forest-50: #296127;
+    --neo4j-forest-55: #145439;
+    --neo4j-forest-60: #0c4d31;
+    --neo4j-forest-65: #0a4324;
+    --neo4j-forest-70: #262d24;
+    --neo4j-forest-75: #052618;
+    --neo4j-forest-80: #021d11;
+
+    /* ── Lemon ── */
+    --neo4j-lemon-10: #fffad1;
+    --neo4j-lemon-15: #fff8bd;
+    --neo4j-lemon-20: #fff178;
+    --neo4j-lemon-25: #ffe500;
+    --neo4j-lemon-30: #ffd600;
+    --neo4j-lemon-35: #f4c318;
+    --neo4j-lemon-40: #d7aa0a;
+    --neo4j-lemon-45: #b48409;
+    --neo4j-lemon-50: #996e00;
+    --neo4j-lemon-55: #765500;
+    --neo4j-lemon-60: #614600;
+    --neo4j-lemon-65: #4d3700;
+    --neo4j-lemon-70: #312e1a;
+    --neo4j-lemon-75: #2e2100;
+    --neo4j-lemon-80: #251b00;
+
+    /* ── Lavender ── */
+    --neo4j-lavender-10: #f7f3ff;
+    --neo4j-lavender-15: #e9deff;
+    --neo4j-lavender-20: #ccb4ff;
+    --neo4j-lavender-25: #b38eff;
+    --neo4j-lavender-30: #a07bec;
+    --neo4j-lavender-35: #8c68d9;
+    --neo4j-lavender-40: #754ec8;
+    --neo4j-lavender-45: #5a34aa;
+    --neo4j-lavender-50: #4b2894;
+    --neo4j-lavender-55: #3b1982;
+    --neo4j-lavender-60: #2c2a34;
+    --neo4j-lavender-65: #220954;
+    --neo4j-lavender-70: #170146;
+    --neo4j-lavender-75: #0e002d;
+    --neo4j-lavender-80: #09001c;
+
+    /* ── Marigold ── */
+    --neo4j-marigold-10: #fff0d2;
+    --neo4j-marigold-15: #ffde9d;
+    --neo4j-marigold-20: #ffcf72;
+    --neo4j-marigold-25: #ffc450;
+    --neo4j-marigold-30: #ffb422;
+    --neo4j-marigold-35: #ffa901;
+    --neo4j-marigold-40: #ec9c00;
+    --neo4j-marigold-45: #da9105;
+    --neo4j-marigold-50: #ba7a00;
+    --neo4j-marigold-55: #986400;
+    --neo4j-marigold-60: #795000;
+    --neo4j-marigold-65: #624100;
+    --neo4j-marigold-70: #543800;
+    --neo4j-marigold-75: #422c00;
+    --neo4j-marigold-80: #251900;
+
+    /* ── Earth ── */
+    --neo4j-earth-10: #fff7f0;
+    --neo4j-earth-15: #fdedda;
+    --neo4j-earth-20: #ffe1c5;
+    --neo4j-earth-25: #f8d1ae;
+    --neo4j-earth-30: #ecbf96;
+    --neo4j-earth-35: #e0ae7f;
+    --neo4j-earth-40: #d19660;
+    --neo4j-earth-45: #af7c4d;
+    --neo4j-earth-50: #8d5d31;
+    --neo4j-earth-55: #763f18;
+    --neo4j-earth-60: #66310b;
+    --neo4j-earth-65: #5b2b09;
+    --neo4j-earth-70: #481f01;
+    --neo4j-earth-75: #361700;
+    --neo4j-earth-80: #220e00;
+
+    /* ── Neutral ── */
+    --neo4j-neutral-10: #ffffff;
+    --neo4j-neutral-15: #f5f6f6;
+    --neo4j-neutral-20: #e2e3e5;
+    --neo4j-neutral-25: #cfd1d4;
+    --neo4j-neutral-30: #bbbec3;
+    --neo4j-neutral-35: #a8acb2;
+    --neo4j-neutral-40: #959aa1;
+    --neo4j-neutral-45: #818790;
+    --neo4j-neutral-50: #6f757e;
+    --neo4j-neutral-55: #5e636a;
+    --neo4j-neutral-60: #4d5157;
+    --neo4j-neutral-65: #3c3f44;
+    --neo4j-neutral-70: #212325;
+    --neo4j-neutral-75: #1a1b1d;
+    --neo4j-neutral-80: #09090a;
+
+    /* ── Beige ── */
+    --neo4j-beige-10: #fffcf4;
+    --neo4j-beige-20: #fff7e3;
+    --neo4j-beige-30: #f2ead4;
+    --neo4j-beige-40: #c1b9a0;
+    --neo4j-beige-50: #999384;
+    --neo4j-beige-60: #666050;
+    --neo4j-beige-70: #3f3824;
+
+    /* ── Highlight Colors ── */
+    --neo4j-highlight-yellow: #faff00;
+    --neo4j-highlight-periwinkle: #6a82ff;
+}

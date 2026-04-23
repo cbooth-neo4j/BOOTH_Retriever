@@ -36,6 +36,13 @@ agent = [
     "deepagents>=0.1.0",
 ]
 
+# FastAPI layer over BOOTHCurator / BOOTHRetriever. Opt-in so the base
+# package stays dependency-light for users who only consume the Python API.
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
 # Everything a developer needs
 dev = [
     "pytest>=8",
@@ -43,6 +50,8 @@ dev = [
     "pytest-cov>=5",
     "testcontainers[neo4j]>=4",
     "ruff>=0.5",
+    "httpx>=0.27",
+    "fastapi>=0.110",
 ]
 
 [project.scripts]

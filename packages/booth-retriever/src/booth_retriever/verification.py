@@ -110,9 +110,9 @@ def verify_cypher(cypher: str | None) -> VerificationResult:
     if cypher.count("(") != cypher.count(")"):
         errors.append("unmatched parentheses")
 
-    for match in re.findall(r"<-\[.*?\]->", cypher):
+    for match in re.findall(r"<-\[[^\[\]]*\]->", cypher):
         errors.append(f"invalid bidirectional relationship: {match}")
-    for match in re.findall(r">-\[.*?\]-<", cypher):
+    for match in re.findall(r">-\[[^\[\]]*\]-<", cypher):
         errors.append(f"invalid reverse relationship: {match}")
 
     if (
@@ -175,12 +175,12 @@ def correct_cypher(cypher: str | None) -> CorrectionResult:
         working = re.sub(r"\s*```", "", working)
         applied.append("stripped markdown fences")
 
-    if re.search(r"<-\[.*?\]->", working):
-        working = re.sub(r"<-(\[.*?\])->", r"-\1-", working)
+    if re.search(r"<-\[[^\[\]]*\]->", working):
+        working = re.sub(r"<-(\[[^\[\]]*\])->", r"-\1-", working)
         applied.append("collapsed invalid bidirectional relationship")
 
-    if re.search(r">-\[.*?\]-<", working):
-        working = re.sub(r">-(\[.*?\])-<", r"-\1-", working)
+    if re.search(r">-\[[^\[\]]*\]-<", working):
+        working = re.sub(r">-(\[[^\[\]]*\])-<", r"-\1-", working)
         applied.append("collapsed invalid reverse relationship")
 
     if re.search(r"-\(\s*[A-Z_][A-Z_0-9]*\s*\)-", working):

@@ -1,0 +1,82 @@
+/* =============================================================================
+   Neo4j Brand Fonts
+   @font-face declarations for recommended weights.
+   Source of truth: ../typography/TYPOGRAPHY.md
+
+   Included weights:
+     SyneNeo    — Medium (500), SemiBold (600), Bold (700)
+     Public Sans — Light (300), Regular (400), Medium (500), SemiBold (600), Bold (700)
+
+   Additional weights available in ../typography/fonts/ but not declared here:
+     Public Sans — Thin, ExtraLight, ExtraBold, Black, and all Italic variants
+
+   To add a weight, copy one of the blocks below and change the filename + font-weight.
+   ============================================================================= */
+
+/* ── SyneNeo ── */
+
+@font-face {
+    font-family: "SyneNeo";
+    src: url("../typography/fonts/SyneNeo-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "SyneNeo";
+    src: url("../typography/fonts/SyneNeo-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "SyneNeo";
+    src: url("../typography/fonts/SyneNeo-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* ── Public Sans ── */
+
+@font-face {
+    font-family: "Public Sans";
+    src: url("../typography/fonts/PublicSans-Light.woff2") format("woff2");
+    font-weight: 300;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Public Sans";
+    src: url("../typography/fonts/PublicSans-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Public Sans";
+    src: url("../typography/fonts/PublicSans-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Public Sans";
+    src: url("../typography/fonts/PublicSans-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Public Sans";
+    src: url("../typography/fonts/PublicSans-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}

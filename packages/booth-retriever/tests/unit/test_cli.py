@@ -8,12 +8,13 @@ stdout/stderr/exit code for each command path.
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
 
-from booth_retriever.cli import app, set_driver_factory
+from booth_retriever.cli import _load_env_file, app, set_driver_factory
 from booth_retriever.curator import (
     ApprovalResult,
     CuratorStats,
@@ -92,6 +93,36 @@ def test_init_fails_without_password(monkeypatch, fake_driver_factory) -> None:
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 2
     assert "password" in result.stderr.lower()
+
+
+# ---------- .env auto-loading ------------------------------------------------
+
+
+def test_load_env_file_reads_dotenv_from_cwd(tmp_path, monkeypatch) -> None:
+    """``_load_env_file`` should populate os.environ from a .env in CWD."""
+    (tmp_path / ".env").write_text(
+        "NEO4J_PASSWORD=from-dotenv\nNEO4J_URI=bolt://example:7687\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+    monkeypatch.delenv("NEO4J_URI", raising=False)
+
+    _load_env_file()
+
+    assert os.environ["NEO4J_PASSWORD"] == "from-dotenv"
+    assert os.environ["NEO4J_URI"] == "bolt://example:7687"
+
+
+def test_load_env_file_does_not_override_real_env(tmp_path, monkeypatch) -> None:
+    """Real environment variables must win over .env values."""
+    (tmp_path / ".env").write_text("NEO4J_PASSWORD=from-dotenv\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NEO4J_PASSWORD", "from-real-env")
+
+    _load_env_file()
+
+    assert os.environ["NEO4J_PASSWORD"] == "from-real-env"
 
 
 # ---------- stats -----------------------------------------------------------

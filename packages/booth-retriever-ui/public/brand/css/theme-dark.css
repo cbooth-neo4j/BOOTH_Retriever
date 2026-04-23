@@ -1,0 +1,244 @@
+/* =============================================================================
+   Neo4j Dark Theme — Semantic UI Tokens
+   Applied via OS preference (prefers-color-scheme) and/or [data-theme] attribute.
+   Source of truth: ../colors/dark-themes/DARK-THEME.md
+   ============================================================================= */
+
+/* ── Auto-switch via OS preference ── */
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        /* Neutral */
+        --neo4j-neutral-text-weakest: #818790;
+        --neo4j-neutral-text-weaker: #a8acb2;
+        --neo4j-neutral-text-weak: #cfd1d4;
+        --neo4j-neutral-text-default: #f5f6f6;
+        --neo4j-neutral-icon: #cfd1d4;
+        --neo4j-neutral-text-inverse: #1a1b1d;
+        --neo4j-neutral-bg-weak: #212325;
+        --neo4j-neutral-bg-default: #1a1b1d;
+        --neo4j-neutral-on-bg-weak: rgba(129, 135, 144, 0.08);
+        --neo4j-neutral-bg-strong: #3c3f44;
+        --neo4j-neutral-bg-stronger: #6f757e;
+        --neo4j-neutral-bg-strongest: #f5f6f6;
+        --neo4j-neutral-bg-status: #a8acb2;
+        --neo4j-neutral-border-weak: #3c3f44;
+        --neo4j-neutral-border-strong: #5e636a;
+        --neo4j-neutral-border-strongest: #bbbec3;
+        --neo4j-neutral-hover: rgba(149, 154, 161, 0.1);
+        --neo4j-neutral-pressed: rgba(149, 154, 161, 0.2);
+
+        /* Primary / Info (Baltic) */
+        --neo4j-primary-text: #8fe3e8;
+        --neo4j-primary-icon: #8fe3e8;
+        --neo4j-primary-bg-weak: #262f31;
+        --neo4j-primary-bg-strong: #8fe3e8;
+        --neo4j-primary-bg-status: #5db3bf;
+        --neo4j-primary-bg-selected: #262f31;
+        --neo4j-primary-border-weak: #02507b;
+        --neo4j-primary-border-strong: #8fe3e8;
+        --neo4j-primary-hover-weak: rgba(143, 227, 232, 0.08);
+        --neo4j-primary-pressed-weak: rgba(143, 227, 232, 0.12);
+        --neo4j-primary-hover-strong: #5db3bf;
+        --neo4j-primary-pressed-strong: #4c99a4;
+        --neo4j-primary-focus: #5db3bf;
+
+        /* Danger (Hibiscus) */
+        --neo4j-danger-text: #ffaa97;
+        --neo4j-danger-icon: #ffaa97;
+        --neo4j-danger-bg-weak: #432520;
+        --neo4j-danger-bg-strong: #ffaa97;
+        --neo4j-danger-bg-status: #f96746;
+        --neo4j-danger-border-weak: #730e00;
+        --neo4j-danger-border-strong: #ffaa97;
+        --neo4j-danger-hover-weak: rgba(255, 170, 151, 0.08);
+        --neo4j-danger-pressed-weak: rgba(255, 170, 151, 0.12);
+        --neo4j-danger-hover-strong: #f96746;
+        --neo4j-danger-pressed-strong: #e84e2c;
+
+        /* Warning (Lemon) */
+        --neo4j-warning-text: #ffd600;
+        --neo4j-warning-icon: #ffd600;
+        --neo4j-warning-bg-weak: #312e1a;
+        --neo4j-warning-bg-strong: #ffd600;
+        --neo4j-warning-bg-status: #d7aa0a;
+        --neo4j-warning-border-weak: #765500;
+        --neo4j-warning-border-strong: #ffd600;
+
+        /* Success (Forest) */
+        --neo4j-success-text: #90cb62;
+        --neo4j-success-icon: #90cb62;
+        --neo4j-success-bg-weak: #262d24;
+        --neo4j-success-bg-strong: #90cb62;
+        --neo4j-success-bg-status: #6fa646;
+        --neo4j-success-border-weak: #296127;
+        --neo4j-success-border-strong: #90cb62;
+
+        /* Discovery (Lavender) */
+        --neo4j-discovery-text: #ccb4ff;
+        --neo4j-discovery-icon: #ccb4ff;
+        --neo4j-discovery-bg-weak: #2c2a34;
+        --neo4j-discovery-bg-strong: #ccb4ff;
+        --neo4j-discovery-bg-status: #a07bec;
+        --neo4j-discovery-border-weak: #4b2894;
+        --neo4j-discovery-border-strong: #ccb4ff;
+    }
+}
+
+/* ── Explicit dark override via data-theme attribute ── */
+
+[data-theme="dark"] {
+    /* Neutral */
+    --neo4j-neutral-text-weakest: #818790;
+    --neo4j-neutral-text-weaker: #a8acb2;
+    --neo4j-neutral-text-weak: #cfd1d4;
+    --neo4j-neutral-text-default: #f5f6f6;
+    --neo4j-neutral-icon: #cfd1d4;
+    --neo4j-neutral-text-inverse: #1a1b1d;
+    --neo4j-neutral-bg-weak: #212325;
+    --neo4j-neutral-bg-default: #1a1b1d;
+    --neo4j-neutral-on-bg-weak: rgba(129, 135, 144, 0.08);
+    --neo4j-neutral-bg-strong: #3c3f44;
+    --neo4j-neutral-bg-stronger: #6f757e;
+    --neo4j-neutral-bg-strongest: #f5f6f6;
+    --neo4j-neutral-bg-status: #a8acb2;
+    --neo4j-neutral-border-weak: #3c3f44;
+    --neo4j-neutral-border-strong: #5e636a;
+    --neo4j-neutral-border-strongest: #bbbec3;
+    --neo4j-neutral-hover: rgba(149, 154, 161, 0.1);
+    --neo4j-neutral-pressed: rgba(149, 154, 161, 0.2);
+
+    /* Primary / Info (Baltic) */
+    --neo4j-primary-text: #8fe3e8;
+    --neo4j-primary-icon: #8fe3e8;
+    --neo4j-primary-bg-weak: #262f31;
+    --neo4j-primary-bg-strong: #8fe3e8;
+    --neo4j-primary-bg-status: #5db3bf;
+    --neo4j-primary-bg-selected: #262f31;
+    --neo4j-primary-border-weak: #02507b;
+    --neo4j-primary-border-strong: #8fe3e8;
+    --neo4j-primary-hover-weak: rgba(143, 227, 232, 0.08);
+    --neo4j-primary-pressed-weak: rgba(143, 227, 232, 0.12);
+    --neo4j-primary-hover-strong: #5db3bf;
+    --neo4j-primary-pressed-strong: #4c99a4;
+    --neo4j-primary-focus: #5db3bf;
+
+    /* Danger (Hibiscus) */
+    --neo4j-danger-text: #ffaa97;
+    --neo4j-danger-icon: #ffaa97;
+    --neo4j-danger-bg-weak: #432520;
+    --neo4j-danger-bg-strong: #ffaa97;
+    --neo4j-danger-bg-status: #f96746;
+    --neo4j-danger-border-weak: #730e00;
+    --neo4j-danger-border-strong: #ffaa97;
+    --neo4j-danger-hover-weak: rgba(255, 170, 151, 0.08);
+    --neo4j-danger-pressed-weak: rgba(255, 170, 151, 0.12);
+    --neo4j-danger-hover-strong: #f96746;
+    --neo4j-danger-pressed-strong: #e84e2c;
+
+    /* Warning (Lemon) */
+    --neo4j-warning-text: #ffd600;
+    --neo4j-warning-icon: #ffd600;
+    --neo4j-warning-bg-weak: #312e1a;
+    --neo4j-warning-bg-strong: #ffd600;
+    --neo4j-warning-bg-status: #d7aa0a;
+    --neo4j-warning-border-weak: #765500;
+    --neo4j-warning-border-strong: #ffd600;
+
+    /* Success (Forest) */
+    --neo4j-success-text: #90cb62;
+    --neo4j-success-icon: #90cb62;
+    --neo4j-success-bg-weak: #262d24;
+    --neo4j-success-bg-strong: #90cb62;
+    --neo4j-success-bg-status: #6fa646;
+    --neo4j-success-border-weak: #296127;
+    --neo4j-success-border-strong: #90cb62;
+
+    /* Discovery (Lavender) */
+    --neo4j-discovery-text: #ccb4ff;
+    --neo4j-discovery-icon: #ccb4ff;
+    --neo4j-discovery-bg-weak: #2c2a34;
+    --neo4j-discovery-bg-strong: #ccb4ff;
+    --neo4j-discovery-bg-status: #a07bec;
+    --neo4j-discovery-border-weak: #4b2894;
+    --neo4j-discovery-border-strong: #ccb4ff;
+}
+
+/* ── Explicit light override (wins over prefers-color-scheme: dark) ── */
+
+[data-theme="light"] {
+    /* Neutral */
+    --neo4j-neutral-text-weakest: #818790;
+    --neo4j-neutral-text-weaker: #5e636a;
+    --neo4j-neutral-text-weak: #4d5157;
+    --neo4j-neutral-text-default: #1a1b1d;
+    --neo4j-neutral-icon: #4d5157;
+    --neo4j-neutral-text-inverse: #ffffff;
+    --neo4j-neutral-bg-weak: #ffffff;
+    --neo4j-neutral-bg-default: #f5f6f6;
+    --neo4j-neutral-on-bg-weak: #f5f6f6;
+    --neo4j-neutral-bg-strong: #e2e3e5;
+    --neo4j-neutral-bg-stronger: #a8acb2;
+    --neo4j-neutral-bg-strongest: #3c3f44;
+    --neo4j-neutral-bg-status: #a8acb2;
+    --neo4j-neutral-border-weak: #e2e3e5;
+    --neo4j-neutral-border-strong: #bbbec3;
+    --neo4j-neutral-border-strongest: #6f757e;
+    --neo4j-neutral-hover: rgba(111, 117, 126, 0.1);
+    --neo4j-neutral-pressed: rgba(111, 117, 126, 0.2);
+
+    /* Primary / Info (Baltic) */
+    --neo4j-primary-text: #0a6190;
+    --neo4j-primary-icon: #0a6190;
+    --neo4j-primary-bg-weak: #e7fafb;
+    --neo4j-primary-bg-strong: #0a6190;
+    --neo4j-primary-bg-status: #4c99a4;
+    --neo4j-primary-bg-selected: #e7fafb;
+    --neo4j-primary-border-weak: #8fe3e8;
+    --neo4j-primary-border-strong: #0a6190;
+    --neo4j-primary-hover-weak: rgba(48, 131, 157, 0.08);
+    --neo4j-primary-pressed-weak: rgba(48, 131, 157, 0.12);
+    --neo4j-primary-hover-strong: #02507b;
+    --neo4j-primary-pressed-strong: #014063;
+    --neo4j-primary-focus: #30839d;
+
+    /* Danger (Hibiscus) */
+    --neo4j-danger-text: #bb2d00;
+    --neo4j-danger-icon: #bb2d00;
+    --neo4j-danger-bg-weak: #ffe9e7;
+    --neo4j-danger-bg-strong: #bb2d00;
+    --neo4j-danger-bg-status: #e84e2c;
+    --neo4j-danger-border-weak: #ffaa97;
+    --neo4j-danger-border-strong: #bb2d00;
+    --neo4j-danger-hover-weak: rgba(212, 51, 0, 0.08);
+    --neo4j-danger-pressed-weak: rgba(212, 51, 0, 0.12);
+    --neo4j-danger-hover-strong: #961200;
+    --neo4j-danger-pressed-strong: #730e00;
+
+    /* Warning (Lemon) */
+    --neo4j-warning-text: #765500;
+    --neo4j-warning-icon: #765500;
+    --neo4j-warning-bg-weak: #fffad1;
+    --neo4j-warning-bg-strong: #765500;
+    --neo4j-warning-bg-status: #d7aa0a;
+    --neo4j-warning-border-weak: #ffd600;
+    --neo4j-warning-border-strong: #996e00;
+
+    /* Success (Forest) */
+    --neo4j-success-text: #3f7824;
+    --neo4j-success-icon: #3f7824;
+    --neo4j-success-bg-weak: #e7fcd7;
+    --neo4j-success-bg-strong: #3f7824;
+    --neo4j-success-bg-status: #5b992b;
+    --neo4j-success-border-weak: #90cb62;
+    --neo4j-success-border-strong: #3f7824;
+
+    /* Discovery (Lavender) */
+    --neo4j-discovery-text: #5a34aa;
+    --neo4j-discovery-icon: #5a34aa;
+    --neo4j-discovery-bg-weak: #e9deff;
+    --neo4j-discovery-bg-strong: #5a34aa;
+    --neo4j-discovery-bg-status: #754ec8;
+    --neo4j-discovery-border-weak: #b38eff;
+    --neo4j-discovery-border-strong: #5a34aa;
+}

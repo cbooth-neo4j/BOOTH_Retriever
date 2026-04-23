@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOOTH Curator</title>
+
+    <!--
+      Neo4j brand CSS bundle. Order matters:
+        1. palettes.css  — raw --neo4j-{palette}-{shade} values
+        2. fonts.css     — @font-face for Public Sans + SyneNeo
+        3. theme-dark.css — semantic tokens (text / bg / border / primary / danger ...)
+      `data-theme="dark"` on <html> locks the app to the dark token set regardless
+      of OS preference. See packages/booth-retriever-ui/public/brand/ for the
+      source files (copied from the canonical neo4j-branding package).
+    -->
+    <link rel="stylesheet" href="/brand/css/palettes.css" />
+    <link rel="stylesheet" href="/brand/css/fonts.css" />
+    <link rel="stylesheet" href="/brand/css/theme-dark.css" />
+    <link rel="stylesheet" href="/src/styles.css" />
+
+    <!-- Preload the body font so the first paint is on-brand. -->
+    <link
+      rel="preload"
+      href="/brand/typography/fonts/PublicSans-Regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/brand/typography/fonts/SyneNeo-SemiBold.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+
+    <!-- Favicon: official Neo4j logo mark (full-colour, transparent). -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/logos/logo-mark-fullcolor-rgb-transparent.svg"
+    />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-brand">
+        <!--
+          Full Neo4j wordmark — white variant for dark backgrounds, per
+          neo4j-branding/logos/LOGOS.md. Never recoloured or distorted.
+        -->
+        <img
+          class="brand-logo"
+          src="/brand/logos/logo-white-rgb-transparent.svg"
+          alt="Neo4j"
+          height="28"
+        />
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="app-title">BOOTH Curator</span>
+      </div>
+      <button id="refresh-btn" type="button" class="secondary">Refresh</button>
+    </header>
+
+    <section class="stats" aria-label="Curation statistics">
+      <div id="stats-tiles" class="stats-tiles">
+        <p class="muted">Loading stats&hellip;</p>
+      </div>
+    </section>
+
+    <main class="workspace">
+      <aside class="pane pane-list" aria-label="Pending queries">
+        <div class="pane-header">
+          <h2>Queries</h2>
+          <select id="status-filter" aria-label="Filter by status">
+            <option value="">Pending (default)</option>
+            <option value="pending_approval">pending_approval</option>
+            <option value="approved">approved</option>
+            <option value="rejected">rejected</option>
+            <option value="declined">declined</option>
+            <option value="needs_review">needs_review</option>
+          </select>
+        </div>
+        <ul id="query-list" class="query-list" role="listbox" aria-label="Queries">
+          <li class="muted">Loading&hellip;</li>
+        </ul>
+      </aside>
+
+      <section id="detail-pane" class="pane pane-detail" aria-label="Query detail">
+        <p class="muted">Select a query on the left to curate it.</p>
+      </section>
+    </main>
+
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

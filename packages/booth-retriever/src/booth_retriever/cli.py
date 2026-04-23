@@ -31,6 +31,27 @@ from . import __version__
 from .curator import ALL_STATUSES, BOOTHCurator, CuratorStats, QueryDetail
 from .schema import init_schema as _init_schema
 
+
+def _load_env_file() -> None:
+    """Load a ``.env`` file from the current working directory (walking up).
+
+    This lets users keep ``NEO4J_URI`` / ``NEO4J_PASSWORD`` / etc. in a project
+    ``.env`` instead of exporting them into every shell session. Real
+    environment variables always win — ``load_dotenv`` defaults to
+    ``override=False``. Imports are wrapped so the CLI still works if
+    ``python-dotenv`` is somehow missing (e.g. stripped from a slimmed install).
+    """
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:  # pragma: no cover - defensive, dotenv is a declared dep
+        return
+    path = find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path)
+
+
+_load_env_file()
+
 app = typer.Typer(
     name="booth",
     help="BOOTH Retriever - curate approved Cypher queries for neo4j-graphrag.",
@@ -53,10 +74,26 @@ app.add_typer(curate_app)
 
 
 def _default_driver_factory(uri: str, user: str, password: str):
-    """Build a real neo4j.Driver. Factored out so tests can override it."""
+    """Build a real neo4j.Driver. Factored out so tests can override it.
+
+    ``UNRECOGNIZED`` notifications (warnings about labels, properties, or
+    relationship types the server hasn't seen yet) are silenced. BOOTH grows
+    its schema lazily — on a fresh install, before any queries have been
+    curated, every read hits these warnings and floods the CLI. Keeping
+    DEPRECATION, PERFORMANCE, SECURITY, etc. visible is still useful.
+    The kwarg was added in neo4j-python 5.21; older drivers fall back to the
+    unfiltered default.
+    """
     from neo4j import GraphDatabase
 
-    return GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        return GraphDatabase.driver(
+            uri,
+            auth=(user, password),
+            notifications_disabled_classifications=["UNRECOGNIZED"],
+        )
+    except TypeError:  # pragma: no cover - exercised only on pre-5.21 drivers
+        return GraphDatabase.driver(uri, auth=(user, password))
 
 
 _driver_factory: Callable = _default_driver_factory

@@ -206,6 +206,62 @@ Use `--json` on read commands to pipe into `jq`.
 
 ---
 
+## Curator UI (web)
+
+A browser-based version of the CLI's curate flow ships as an opt-in extra,
+designed to be embeddable in a Neo4j dashboard (NeoDash iframe report, or any
+similar host):
+
+- **Backend** — a small FastAPI layer at `booth_retriever.web` that wraps
+  `BOOTHCurator`. Browser clients never see Neo4j credentials.
+- **Frontend** — a static TypeScript + Vite app in the sibling
+  `packages/booth-retriever-ui/` package. No framework; vanilla DOM.
+
+### Install + run the backend
+
+```bash
+pip install -e ".[web]"
+
+# Reads NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD / NEO4J_DATABASE from the
+# environment or a .env file in CWD (same rules as the `booth` CLI).
+uvicorn booth_retriever.web:app --reload
+# -> http://localhost:8000
+```
+
+Routes (all under `/api`, JSON throughout):
+
+| Method | Path                              | Curator call                    |
+| ------ | --------------------------------- | ------------------------------- |
+| GET    | `/api/health`                     | —                               |
+| GET    | `/api/stats`                      | `stats()`                       |
+| GET    | `/api/queries?status=&limit=`     | `list_pending` / `list_by_status` |
+| GET    | `/api/queries/{id}`               | `get()` (404 if missing)        |
+| POST   | `/api/queries/{id}/approve`       | `approve()`                     |
+| POST   | `/api/queries/{id}/reject`        | `reject()`                      |
+| POST   | `/api/queries/{id}/edit`          | `edit_fewshot()`                |
+| POST   | `/api/queries/{id}/feedback`      | `submit_feedback()`             |
+
+Error mapping: Cypher verification failures surface as `422` with the
+verifier's message in `detail`; missing queries as `404`; other curator
+`ValueError`s as `400`.
+
+CORS defaults to `http://localhost:5173` (the Vite dev server). Override by
+setting `BOOTH_CORS_ORIGINS` to a comma-separated list, or pass
+`cors_origins=[...]` to `create_app()`.
+
+### Run the frontend
+
+See [`packages/booth-retriever-ui/README.md`](../booth-retriever-ui/README.md)
+for the dev workflow and production build. TL;DR:
+
+```bash
+cd packages/booth-retriever-ui
+npm install
+npm run dev    # -> http://localhost:5173
+```
+
+---
+
 ## Testing
 
 Four tiers, from fastest to slowest:

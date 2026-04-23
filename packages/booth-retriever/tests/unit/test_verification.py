@@ -104,6 +104,21 @@ def test_verify_passes_reverse_directed() -> None:
     assert result.is_valid is True
 
 
+def test_verify_passes_in_then_out_through_intermediate_node() -> None:
+    """An incoming edge and outgoing edge meeting at a node is legal Cypher.
+
+    Regression guard: a previous verifier regex ``<-\\[.*?\\]->`` matched
+    lazily across the intermediate node and flagged the whole substring as
+    a bidirectional relationship.
+    """
+    result = verify_cypher(
+        "MATCH (a:BANKING_PARTNER)<-[:HAS_ENTITY]-(:Chunk)"
+        "-[:HAS_ENTITY]->(b:LEGAL_REQUIREMENT) RETURN a, b"
+    )
+    assert result.is_valid is True
+    assert not any("bidirectional" in e.lower() for e in result.errors)
+
+
 def test_verify_passes_delete_without_return() -> None:
     result = verify_cypher("MATCH (a:Stale) DELETE a")
     assert result.is_valid is True
@@ -193,6 +208,17 @@ def test_correct_leaves_valid_cypher_unchanged() -> None:
     result = correct_cypher("MATCH (a)-[:KNOWS]->(b) RETURN a.name")
     assert result.was_corrected is False
     assert result.corrections == []
+
+
+def test_correct_leaves_in_then_out_pattern_unchanged() -> None:
+    """The corrector must not rewrite ``<-[:R1]-(n)-[:R2]->`` either."""
+    original = (
+        "MATCH (a:BANKING_PARTNER)<-[:HAS_ENTITY]-(:Chunk)"
+        "-[:HAS_ENTITY]->(b:LEGAL_REQUIREMENT) RETURN a, b"
+    )
+    result = correct_cypher(original)
+    assert result.was_corrected is False
+    assert result.corrected_cypher == original
 
 
 # ---------- verify_and_correct ----------------------------------------------

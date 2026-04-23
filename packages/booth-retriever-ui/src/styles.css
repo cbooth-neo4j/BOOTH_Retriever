@@ -1,0 +1,504 @@
+/* BOOTH Curator — on-brand dark theme.
+ *
+ * Every value here aliases a token from the canonical Neo4j brand CSS
+ * bundle at /public/brand/css/ (palettes.css + theme-dark.css). We
+ * deliberately do NOT hardcode hex values — if the brand team updates
+ * the palette, this file inherits the change automatically.
+ *
+ * Reference:
+ *   neo4j-branding/css/CSS.md
+ *   neo4j-branding/colors/dark-themes/DARK-THEME.md
+ *   neo4j-branding/typography/TYPOGRAPHY.md
+ */
+
+:root {
+  /* -- Shell -------------------------------------------------------- */
+  --app-bg:          var(--neo4j-neutral-bg-default);
+  --app-bg-weak:     var(--neo4j-neutral-bg-weak);
+  --app-bg-strong:   var(--neo4j-neutral-bg-strong);
+  --app-fg:          var(--neo4j-neutral-text-default);
+  --app-fg-weak:     var(--neo4j-neutral-text-weak);
+  --app-fg-weaker:   var(--neo4j-neutral-text-weaker);
+  --app-fg-weakest:  var(--neo4j-neutral-text-weakest);
+  --app-border:      var(--neo4j-neutral-border-weak);
+  --app-border-strong: var(--neo4j-neutral-border-strong);
+
+  /* -- Primary (Baltic cyan in dark) -------------------------------- */
+  --app-primary:         var(--neo4j-primary-bg-strong);
+  --app-primary-hover:   var(--neo4j-primary-hover-strong);
+  --app-primary-pressed: var(--neo4j-primary-pressed-strong);
+  --app-primary-text:    var(--neo4j-primary-text);
+  --app-primary-weak-bg: var(--neo4j-primary-bg-weak);
+
+  /* -- Semantic (status) -------------------------------------------- */
+  --app-danger:          var(--neo4j-danger-bg-strong);
+  --app-danger-text:     var(--neo4j-danger-text);
+  --app-danger-weak-bg:  var(--neo4j-danger-bg-weak);
+  --app-warning:         var(--neo4j-warning-bg-strong);
+  --app-warning-text:    var(--neo4j-warning-text);
+  --app-success:         var(--neo4j-success-bg-strong);
+  --app-success-text:    var(--neo4j-success-text);
+  --app-discovery:       var(--neo4j-discovery-bg-strong);
+  --app-discovery-text:  var(--neo4j-discovery-text);
+
+  /* -- Status palette (Query lifecycle) ----------------------------- *
+   * Each BOOTH status maps to one of Neo4j's semantic colour families:
+   *   pending_approval -> warning (Lemon)
+   *   approved         -> success (Forest)
+   *   rejected         -> danger  (Hibiscus)
+   *   declined         -> discovery (Lavender)
+   *   needs_review     -> primary (Baltic)
+   *   fewshot (marker) -> Baltic 30 teal (hand-picked from Baltic palette)
+   */
+  --status-pending_approval: var(--neo4j-warning-bg-strong);
+  --status-approved:         var(--neo4j-success-bg-strong);
+  --status-rejected:         var(--neo4j-danger-bg-strong);
+  --status-declined:         var(--neo4j-discovery-bg-strong);
+  --status-needs_review:     var(--neo4j-primary-bg-strong);
+  --status-fewshot:          var(--neo4j-baltic-30);
+
+  /* -- Typography --------------------------------------------------- *
+   * Public Sans is the workhorse. SyneNeo is reserved for display-size
+   * headings (the app title, the big number on the total tile).
+   */
+  --font-body:    "Public Sans", system-ui, -apple-system, BlinkMacSystemFont,
+                  "Segoe UI", Roboto, sans-serif;
+  --font-display: "SyneNeo", "Public Sans", system-ui, sans-serif;
+
+  /* -- Layout ------------------------------------------------------- */
+  --radius: 6px;
+  --pad: 12px;
+  --gap: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.4;
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-family: var(--font-body);
+}
+
+/* -------------------------------------------------------------------- */
+/* Buttons                                                              */
+/* -------------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius);
+  border: 1px solid var(--app-border-strong);
+  padding: 6px 12px;
+  background: var(--app-bg-strong);
+  color: var(--app-fg);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--neo4j-neutral-hover);
+  border-color: var(--app-primary);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--app-primary);
+  border-color: var(--app-primary);
+  color: var(--neo4j-neutral-text-inverse);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--app-primary-hover);
+  border-color: var(--app-primary-hover);
+}
+button.primary:active:not(:disabled) {
+  background: var(--app-primary-pressed);
+  border-color: var(--app-primary-pressed);
+}
+
+button.secondary {
+  background: transparent;
+}
+
+button.danger {
+  background: transparent;
+  border-color: var(--app-danger);
+  color: var(--app-danger-text);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--app-danger-weak-bg);
+}
+
+button.link {
+  background: transparent;
+  border: none;
+  color: var(--app-primary-text);
+  padding: 2px 6px;
+  text-decoration: underline;
+}
+button.link:hover:not(:disabled) {
+  background: transparent;
+  border: none;
+  color: var(--app-primary-hover);
+}
+
+/* -------------------------------------------------------------------- */
+/* Form fields                                                          */
+/* -------------------------------------------------------------------- */
+
+select, input[type="text"], textarea {
+  font: inherit;
+  background: var(--app-bg-weak);
+  color: var(--app-fg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  width: 100%;
+}
+
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+  min-height: 120px;
+}
+
+input[type="text"]:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 2px var(--neo4j-primary-hover-weak);
+}
+
+/* -------------------------------------------------------------------- */
+/* Header / brand                                                       */
+/* -------------------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pad) calc(var(--pad) * 1.5);
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-weak);
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+
+.brand-logo {
+  /* Per LOGOS.md: never recolour / stretch / crop. The file itself is
+     white-on-transparent; we only scale it uniformly. */
+  display: block;
+  height: 28px;
+  width: auto;
+}
+
+.brand-divider {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: var(--app-border-strong);
+}
+
+.app-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+  color: var(--app-fg);
+}
+
+/* -------------------------------------------------------------------- */
+/* Stats tiles                                                          */
+/* -------------------------------------------------------------------- */
+
+.stats {
+  padding: var(--pad) calc(var(--pad) * 1.5);
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-weak);
+}
+
+.stats-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+}
+
+.tile {
+  flex: 0 0 auto;
+  min-width: 140px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tile-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-fg-weaker);
+}
+.tile-value {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--app-fg);
+  line-height: 1.1;
+}
+
+.tile-total              { border-color: var(--app-primary); }
+.tile-pending_approval   { border-color: var(--status-pending_approval); }
+.tile-approved           { border-color: var(--status-approved); }
+.tile-rejected           { border-color: var(--status-rejected); }
+.tile-declined           { border-color: var(--status-declined); }
+.tile-needs_review       { border-color: var(--status-needs_review); }
+
+/* -------------------------------------------------------------------- */
+/* Workspace layout                                                     */
+/* -------------------------------------------------------------------- */
+
+.workspace {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 0;
+  min-height: 0;
+}
+
+.pane {
+  padding: var(--pad) calc(var(--pad) * 1.5);
+  overflow: auto;
+}
+
+.pane-list {
+  border-right: 1px solid var(--app-border);
+  background: var(--app-bg-weak);
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: var(--pad);
+}
+.pane-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-fg);
+}
+
+.pane-header select {
+  width: auto;
+  min-width: 180px;
+}
+
+/* -------------------------------------------------------------------- */
+/* Query list                                                           */
+/* -------------------------------------------------------------------- */
+
+.query-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.query-row {
+  padding: 8px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-bg);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.query-row:hover {
+  border-color: var(--app-primary);
+  background: var(--neo4j-neutral-hover);
+}
+.query-row.selected {
+  border-color: var(--app-primary);
+  background: var(--app-primary-weak-bg);
+}
+
+.query-row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.query-row-text {
+  margin: 4px 0;
+  color: var(--app-fg);
+}
+
+.query-row-meta {
+  margin: 0;
+  font-size: 11px;
+}
+
+/* -------------------------------------------------------------------- */
+/* Detail pane                                                          */
+/* -------------------------------------------------------------------- */
+
+.pane-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+.detail-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.query-text {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--app-bg-weak);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+}
+
+.labeled {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-fg-weaker);
+}
+
+.field-error {
+  color: var(--app-danger-text);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feedback-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--app-border);
+  padding-top: var(--pad);
+}
+
+/* -------------------------------------------------------------------- */
+/* Status badges                                                        */
+/* -------------------------------------------------------------------- */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--neo4j-neutral-text-inverse);
+  background: var(--app-fg-weaker);
+}
+.badge-pending_approval { background: var(--status-pending_approval); }
+.badge-approved         { background: var(--status-approved); }
+.badge-rejected         { background: var(--status-rejected); }
+.badge-declined         { background: var(--status-declined); }
+.badge-needs_review     { background: var(--status-needs_review); }
+.badge-fewshot          { background: var(--status-fewshot); }
+
+.risk {
+  font-size: 11px;
+  color: var(--app-fg-weaker);
+}
+
+/* -------------------------------------------------------------------- */
+/* Utility                                                              */
+/* -------------------------------------------------------------------- */
+
+.muted { color: var(--app-fg-weaker); }
+.warn  { color: var(--app-warning-text); }
+.hidden { display: none; }
+
+/* -------------------------------------------------------------------- */
+/* Toast                                                                */
+/* -------------------------------------------------------------------- */
+
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+.toast {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--app-bg-strong);
+  border: 1px solid var(--app-border);
+  color: var(--app-fg);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  max-width: 360px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.toast-error {
+  border-color: var(--app-danger);
+  color: var(--app-danger-text);
+}
