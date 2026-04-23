@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Protocol
 
+from .verification import verify_cypher
+
 if TYPE_CHECKING:
     from neo4j import Driver
 
@@ -255,12 +257,18 @@ class BOOTHCurator:
         category: str | None = None,
         refinement_agent: RefinementProtocol | None = None,
         raw_cypher: str | None = None,
+        verify: bool = True,
     ) -> ApprovalResult:
         """Approve a Query and attach (or replace) its FewShot template.
 
         Provide exactly one of ``cypher_template`` or ``refinement_agent``.
         Approving an already-approved Query updates the linked FewShot in
         place rather than creating a duplicate.
+
+        When ``verify=True`` (default), the Cypher template is run through
+        ``verify_cypher`` first and rejected with ``ValueError`` if any
+        rule fires. Pass ``verify=False`` to skip (useful when porting a
+        known-good legacy template).
         """
         if not query_id:
             raise ValueError("query_id must be a non-empty string")
@@ -287,6 +295,14 @@ class BOOTHCurator:
 
         if not cypher_template or not cypher_template.strip():
             raise ValueError("cypher_template must be a non-empty string")
+
+        if verify:
+            verification = verify_cypher(cypher_template)
+            if not verification.is_valid:
+                raise ValueError(
+                    "cypher_template failed verification: "
+                    + "; ".join(verification.errors)
+                )
 
         parameters = list(parameters or [])
         now = _utcnow_iso()
@@ -360,15 +376,24 @@ class BOOTHCurator:
         *,
         cypher_template: str,
         parameters: list[str] | None = None,
+        verify: bool = True,
     ) -> None:
         """Edit the Cypher on a Query's already-linked FewShot.
 
         Raises if the query has no linked FewShot yet (use ``approve``
         first). Unlike ``approve``, this does NOT change the query's
-        status.
+        status. ``verify`` defaults to True; see ``approve`` for details.
         """
         if not cypher_template or not cypher_template.strip():
             raise ValueError("cypher_template must be a non-empty string")
+
+        if verify:
+            verification = verify_cypher(cypher_template)
+            if not verification.is_valid:
+                raise ValueError(
+                    "cypher_template failed verification: "
+                    + "; ".join(verification.errors)
+                )
 
         parameters = list(parameters or [])
         cypher = (

@@ -1,0 +1,74 @@
+name: booth-retriever CI
+
+# Every push and PR runs smoke+unit (fast, no Docker).
+# Integration tests run on a schedule because they spin up a testcontainers
+# Neo4j and take ~60s on a cold cache.
+
+on:
+  push:
+    paths:
+      - "packages/booth-retriever/**"
+      - ".github/workflows/booth-retriever-ci.yml"
+  pull_request:
+    paths:
+      - "packages/booth-retriever/**"
+      - ".github/workflows/booth-retriever-ci.yml"
+  schedule:
+    # Daily at 04:30 UTC so integration regressions surface within a day.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: packages/booth-retriever
+
+jobs:
+  smoke-and-unit:
+    name: "smoke+unit (py${{ matrix.python-version }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Smoke + unit tests
+        run: pytest -m "smoke or unit" --cov=booth_retriever --cov-report=term-missing
+
+  integration:
+    name: "integration (real Neo4j via testcontainers)"
+    runs-on: ubuntu-latest
+    # Schedule and manual runs only; the job pulls a Neo4j Docker image and
+    # adds minutes to PR runs we don't want to pay on every commit.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Integration tests
+        run: pytest -m integration -v

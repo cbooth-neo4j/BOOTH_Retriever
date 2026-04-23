@@ -1,0 +1,26 @@
+name: "Starter questions"
+description: >
+  A small bootstrap test set. Replace the questions with ones that make sense
+  for your knowledge graph. The harness does a simple string-contains match
+  on expected_keywords; use an LLM judge for more nuanced evaluation.
+
+questions:
+  - text: "How many users are in the system?"
+    expected_keywords: []
+    expected_to_hit: false
+
+  - text: "Show me all products in the Electronics category."
+    expected_keywords: []
+    expected_to_hit: false
+
+  - text: "What's the average order value?"
+    expected_keywords: []
+    expected_to_hit: false
+
+  - text: "Who are our top 5 customers by revenue?"
+    expected_keywords: []
+    expected_to_hit: false
+
+  - text: "List all open tickets from the last 7 days."
+    expected_keywords: []
+    expected_to_hit: false

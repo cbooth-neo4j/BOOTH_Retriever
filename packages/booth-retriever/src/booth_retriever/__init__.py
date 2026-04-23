@@ -52,6 +52,13 @@ from .curator import (
 from .models import BOOTHResponse
 from .retriever import BOOTHRetriever
 from .schema import SchemaInitResult, init_schema
+from .verification import (
+    CorrectionResult,
+    VerificationResult,
+    correct_cypher,
+    verify_and_correct,
+    verify_cypher,
+)
 
 __version__ = "0.0.1"
 
@@ -62,6 +69,7 @@ __all__ = [
     "BOOTHRetriever",
     "BOOTHCurator",
     "BOOTHResponse",
+    "CorrectionResult",
     "CuratorStats",
     "PENDING_STATUSES",
     "PendingQuery",
@@ -69,5 +77,9 @@ __all__ = [
     "RefinementAgent",
     "RefinementResult",
     "SchemaInitResult",
+    "VerificationResult",
+    "correct_cypher",
     "init_schema",
+    "verify_and_correct",
+    "verify_cypher",
 ]
