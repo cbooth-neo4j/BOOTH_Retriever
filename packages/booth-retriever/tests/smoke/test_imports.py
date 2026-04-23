@@ -55,6 +55,27 @@ def test_boothcurator_class_is_constructable_with_mock_driver() -> None:
 
     curator = BOOTHCurator(driver=MagicMock(), database="foo")
     assert curator.database == "foo"
+    for method in (
+        "list_pending",
+        "list_by_status",
+        "get",
+        "stats",
+        "approve",
+        "reject",
+        "edit_fewshot",
+        "submit_feedback",
+    ):
+        assert hasattr(curator, method), f"BOOTHCurator missing method {method!r}"
+
+
+def test_refinement_agent_is_constructable_with_mock_llm() -> None:
+    """RefinementAgent accepts any duck-typed LLM interface."""
+    from unittest.mock import MagicMock
+
+    from booth_retriever import RefinementAgent
+
+    agent = RefinementAgent(llm=MagicMock())
+    assert hasattr(agent, "refine")
 
 
 def test_init_schema_is_a_function() -> None:
