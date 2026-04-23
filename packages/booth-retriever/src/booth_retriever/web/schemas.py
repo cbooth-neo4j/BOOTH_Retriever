@@ -36,3 +36,15 @@ class FeedbackRequest(BaseModel):
     """Body for ``POST /api/queries/{id}/feedback``."""
 
     helpful: bool
+
+
+class AskRequest(BaseModel):
+    """Body for ``POST /api/ask``.
+
+    Mirrors the arguments to ``BOOTHRetriever.query()``. ``query_text`` must
+    be non-empty so we can reject whitespace-only questions at the edge
+    instead of paying for an embedder round-trip that always fails.
+    """
+
+    query_text: str = Field(..., min_length=1)
+    is_high_risk: bool = False

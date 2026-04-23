@@ -235,6 +235,36 @@ select:focus {
   color: var(--app-fg);
 }
 
+/* -- Primary navigation (Ask / Curate) -------------------------------- */
+.app-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  margin-right: var(--pad);
+}
+
+.nav-link {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  font-weight: 500;
+  color: var(--app-fg-weak);
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.nav-link:hover {
+  background: var(--neo4j-neutral-hover);
+  color: var(--app-fg);
+}
+
+.nav-link[aria-current="page"] {
+  color: var(--app-fg);
+  background: var(--app-primary-weak-bg);
+  border-color: var(--app-primary);
+}
+
 /* -------------------------------------------------------------------- */
 /* Stats tiles                                                          */
 /* -------------------------------------------------------------------- */
@@ -501,4 +531,150 @@ select:focus {
 .toast-error {
   border-color: var(--app-danger);
   color: var(--app-danger-text);
+}
+
+/* -------------------------------------------------------------------- */
+/* Ask page                                                             */
+/* -------------------------------------------------------------------- */
+
+.ask-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: calc(var(--pad) * 1.5);
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ask-card,
+.answer-card {
+  background: var(--app-bg-weak);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: calc(var(--pad) * 1.5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.ask-card h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ask-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ask-input {
+  /* Override the mono default from the global textarea rule — the ask
+     textarea is prose, not code. */
+  font-family: var(--font-body);
+  min-height: 100px;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-fg-weak);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox-row input[type="checkbox"] {
+  accent-color: var(--app-primary);
+}
+
+/* -- Answer card --------------------------------------------------- */
+
+.answer-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--app-border);
+  background: var(--app-bg);
+}
+
+.answer-kind {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.answer-banner-success {
+  border-color: var(--app-success);
+  background: var(--neo4j-success-bg-weak, var(--app-bg));
+}
+.answer-banner-success .answer-kind { color: var(--app-success-text); }
+
+.answer-banner-declined {
+  border-color: var(--app-danger);
+  background: var(--app-danger-weak-bg);
+}
+.answer-banner-declined .answer-kind { color: var(--app-danger-text); }
+
+.answer-banner-error {
+  border-color: var(--app-warning);
+}
+.answer-banner-error .answer-kind { color: var(--app-warning-text); }
+
+.answer-banner-info {
+  border-color: var(--app-border-strong);
+}
+.answer-banner-info .answer-kind { color: var(--app-fg-weak); }
+
+.answer-text {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.answer-meta {
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  background: var(--app-bg);
+}
+.answer-meta > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--app-fg-weak);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  list-style: none;
+}
+.answer-meta > summary::-webkit-details-marker { display: none; }
+.answer-meta > summary::before {
+  content: "▸ ";
+  color: var(--app-fg-weaker);
+}
+.answer-meta[open] > summary::before { content: "▾ "; }
+
+.answer-meta-json {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--app-bg-weak);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-fg);
+  max-height: 240px;
+  overflow: auto;
 }

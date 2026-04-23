@@ -18,6 +18,7 @@ from booth_retriever.curator import (
     PendingQuery,
     QueryDetail,
 )
+from booth_retriever.models import BOOTHResponse
 from booth_retriever.web import create_app
 
 pytestmark = pytest.mark.unit
@@ -30,6 +31,20 @@ def curator_client():
     app = create_app(curator=mock)
     with TestClient(app) as client:
         yield client, mock
+
+
+@pytest.fixture
+def ask_client():
+    """Yield ``(TestClient, MagicMock retriever, MagicMock curator)``.
+
+    Used by the ``/api/ask`` tests. The curator is still injected to keep
+    the lifespan happy (it skips the Neo4j driver construction path).
+    """
+    curator = MagicMock()
+    retriever = MagicMock()
+    app = create_app(curator=curator, retriever=retriever)
+    with TestClient(app) as client:
+        yield client, retriever, curator
 
 
 # ---------- Health ----------------------------------------------------------
@@ -284,6 +299,83 @@ def test_feedback_missing_query_is_404(curator_client) -> None:
     curator.submit_feedback.side_effect = ValueError("No Query node with id 'nope'")
     resp = client.post("/api/queries/nope/feedback", json={"helpful": True})
     assert resp.status_code == 404
+
+
+# ---------- Ask -------------------------------------------------------------
+
+
+def test_ask_returns_flattened_response(ask_client) -> None:
+    """Happy path: the retriever's BOOTHResponse is flattened to JSON."""
+    client, retriever, _ = ask_client
+    retriever.query.return_value = BOOTHResponse(
+        success=True,
+        answer="42",
+        query_id="q-123",
+        similar_match=True,
+        high_risk=False,
+        declined=False,
+        cypher_used="MATCH (n) RETURN count(n)",
+        tool_used="cache_hit",
+    )
+
+    resp = client.post(
+        "/api/ask", json={"query_text": "How many nodes?", "is_high_risk": False}
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["answer"] == "42"
+    assert payload["query_id"] == "q-123"
+    assert payload["similar_match"] is True
+    assert payload["declined"] is False
+    assert payload["cypher_used"] == "MATCH (n) RETURN count(n)"
+    assert payload["tool_used"] == "cache_hit"
+    # raw_data is intentionally omitted.
+    assert "raw_data" not in payload
+
+    _, kwargs = retriever.query.call_args
+    assert retriever.query.call_args[0] == ("How many nodes?",)
+    assert kwargs["is_high_risk"] is False
+
+
+def test_ask_forwards_high_risk_flag(ask_client) -> None:
+    client, retriever, _ = ask_client
+    retriever.query.return_value = BOOTHResponse(
+        declined=True, high_risk=True, answer="declined"
+    )
+    resp = client.post(
+        "/api/ask", json={"query_text": "sensitive", "is_high_risk": True}
+    )
+    assert resp.status_code == 200
+    _, kwargs = retriever.query.call_args
+    assert kwargs["is_high_risk"] is True
+
+
+def test_ask_rejects_empty_query(ask_client) -> None:
+    """Pydantic ``min_length=1`` guards the embedder from whitespace input."""
+    client, retriever, _ = ask_client
+    resp = client.post("/api/ask", json={"query_text": ""})
+    assert resp.status_code == 422
+    retriever.query.assert_not_called()
+
+
+def test_ask_returns_503_when_retriever_unavailable(monkeypatch) -> None:
+    """No injected retriever + no ``OPENAI_API_KEY`` => 503 with clear message."""
+    from booth_retriever.web import api as api_module
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def boom(_curator):
+        raise api_module._RetrieverUnavailable("OPENAI_API_KEY is not set. …")
+
+    monkeypatch.setattr(api_module, "_default_retriever_factory", boom)
+
+    app = create_app(curator=MagicMock())
+    with TestClient(app) as client:
+        resp = client.post("/api/ask", json={"query_text": "hello"})
+
+    assert resp.status_code == 503
+    assert "OPENAI_API_KEY" in resp.json()["detail"]
 
 
 # ---------- CORS / misc -----------------------------------------------------

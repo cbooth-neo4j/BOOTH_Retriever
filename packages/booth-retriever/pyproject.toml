@@ -38,9 +38,12 @@ agent = [
 
 # FastAPI layer over BOOTHCurator / BOOTHRetriever. Opt-in so the base
 # package stays dependency-light for users who only consume the Python API.
+# The [openai] sub-extra of neo4j-graphrag is pulled in so that the /api/ask
+# endpoint has a working embedder out of the box.
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    "neo4j-graphrag[openai]>=1.0",
 ]
 
 # Everything a developer needs

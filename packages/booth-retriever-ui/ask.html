@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOOTH Ask</title>
+
+    <!--
+      Brand CSS bundle, same order as index.html:
+        1. palettes.css  — raw --neo4j-{palette}-{shade} values
+        2. fonts.css     — @font-face for Public Sans + SyneNeo
+        3. theme-dark.css — semantic tokens
+        4. styles.css    — app-specific styles
+    -->
+    <link rel="stylesheet" href="/brand/css/palettes.css" />
+    <link rel="stylesheet" href="/brand/css/fonts.css" />
+    <link rel="stylesheet" href="/brand/css/theme-dark.css" />
+    <link rel="stylesheet" href="/src/styles.css" />
+
+    <link
+      rel="preload"
+      href="/brand/typography/fonts/PublicSans-Regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/brand/typography/fonts/SyneNeo-SemiBold.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/brand/logos/logo-mark-fullcolor-rgb-transparent.svg"
+    />
+  </head>
+  <body class="page-ask">
+    <header class="app-header">
+      <div class="app-brand">
+        <img
+          class="brand-logo"
+          src="/brand/logos/logo-white-rgb-transparent.svg"
+          alt="Neo4j"
+          height="28"
+        />
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="app-title">BOOTH Ask</span>
+      </div>
+      <nav class="app-nav" aria-label="Primary">
+        <a href="/ask.html" class="nav-link" aria-current="page">Ask</a>
+        <a href="/index.html" class="nav-link">Curate</a>
+      </nav>
+    </header>
+
+    <main class="ask-layout">
+      <section class="ask-card" aria-label="Ask BOOTH a question">
+        <h2>Ask BOOTH</h2>
+        <p class="muted">
+          Questions are routed to the BOOTH retriever. First-time questions
+          are sent to the curation queue; cache hits run the approved
+          Cypher directly.
+        </p>
+
+        <form id="ask-form" class="ask-form">
+          <label class="field-label" for="ask-input">Your question</label>
+          <textarea
+            id="ask-input"
+            class="ask-input"
+            rows="4"
+            spellcheck="true"
+            placeholder="How many users are in the system?"
+            required
+          ></textarea>
+
+          <label class="checkbox-row">
+            <input id="ask-risk" type="checkbox" />
+            <span>Flag as high-risk (will be auto-declined)</span>
+          </label>
+
+          <div class="actions">
+            <button id="ask-submit" type="submit" class="primary">Ask</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="answer-card" class="answer-card hidden" aria-live="polite">
+        <!-- Populated by renderAnswer() in src/render.ts -->
+      </section>
+    </main>
+
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <script type="module" src="/src/ask.ts"></script>
+  </body>
+</html>

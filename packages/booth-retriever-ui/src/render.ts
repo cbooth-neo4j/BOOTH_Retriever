@@ -4,7 +4,12 @@
 // data (or callbacks) and return DOM nodes or mutate an existing container.
 // ``main.ts`` wires them to the API and to event handlers.
 
-import type { PendingQuery, QueryDetail, StatsResponse } from "./types.js";
+import type {
+  AskResponse,
+  PendingQuery,
+  QueryDetail,
+  StatsResponse,
+} from "./types.js";
 
 /** Display order of status counters in the top bar. */
 const STATUS_ORDER = [
@@ -324,6 +329,133 @@ export function showDetailError(container: HTMLElement, message: string): void {
   if (!errorNode) return;
   errorNode.textContent = message;
   errorNode.classList.remove("hidden");
+}
+
+// ---------------------------------------------------------------------------
+// Ask / answer card
+// ---------------------------------------------------------------------------
+
+export interface AnswerCallbacks {
+  onFeedback: (helpful: boolean) => void;
+}
+
+/**
+ * Paint a single-turn response from ``POST /api/ask`` into ``container``.
+ *
+ * The UI mirrors the Streamlit reference app: a status banner derived
+ * from ``resp.success`` / ``resp.declined``, the answer text, an
+ * expandable metadata block, and (when feedback is possible) a pair of
+ * Helpful / Not helpful buttons. Feedback is disabled for declined
+ * responses or when the server didn't surface a ``query_id``.
+ */
+export function renderAnswer(
+  container: HTMLElement,
+  resp: AskResponse,
+  callbacks: AnswerCallbacks,
+): void {
+  container.replaceChildren();
+  container.classList.remove("hidden");
+
+  const kind = answerKind(resp);
+  const banner = el("div", {
+    className: `answer-banner answer-banner-${kind}`,
+    attrs: { role: "status" },
+  });
+  banner.append(
+    el("span", { className: "answer-kind", text: kindLabel(kind) }),
+    ...(resp.similar_match
+      ? [el("span", { className: "badge badge-fewshot", text: "cache hit" })]
+      : []),
+    ...(resp.high_risk
+      ? [el("span", { className: "badge badge-rejected", text: "high risk" })]
+      : []),
+  );
+  container.appendChild(banner);
+
+  container.appendChild(
+    el("p", { className: `answer-text answer-text-${kind}`, text: resp.answer }),
+  );
+
+  // Metadata — collapsed by default; mirrors Streamlit's st.json(...) expander.
+  const details = el("details", { className: "answer-meta" });
+  details.appendChild(el("summary", { text: "Response metadata" }));
+  const pre = el("pre", { className: "answer-meta-json" });
+  pre.textContent = JSON.stringify(
+    {
+      query_id: resp.query_id,
+      similar_match: resp.similar_match,
+      high_risk: resp.high_risk,
+      declined: resp.declined,
+      tool_used: resp.tool_used,
+      cypher_used: resp.cypher_used,
+      error_message: resp.error_message,
+    },
+    null,
+    2,
+  );
+  details.appendChild(pre);
+  container.appendChild(details);
+
+  // Feedback bar — only meaningful when the server actually persisted a
+  // Query node we can attach feedback to.
+  const canFeedback = Boolean(resp.query_id) && !resp.declined;
+  const feedbackBar = el("div", { className: "feedback-bar" });
+  feedbackBar.append(
+    el("span", {
+      className: "muted",
+      text: canFeedback
+        ? "Was this answer helpful?"
+        : "Feedback unavailable for this response.",
+    }),
+  );
+  if (canFeedback) {
+    const helpful = el("button", {
+      text: "Helpful",
+      className: "primary",
+      attrs: { type: "button" },
+    });
+    const notHelpful = el("button", {
+      text: "Not helpful",
+      className: "secondary",
+      attrs: { type: "button" },
+    });
+    const disableAfter = () => {
+      helpful.disabled = true;
+      notHelpful.disabled = true;
+    };
+    helpful.addEventListener("click", () => {
+      disableAfter();
+      callbacks.onFeedback(true);
+    });
+    notHelpful.addEventListener("click", () => {
+      disableAfter();
+      callbacks.onFeedback(false);
+    });
+    feedbackBar.append(helpful, notHelpful);
+  }
+  container.appendChild(feedbackBar);
+}
+
+type AnswerKind = "success" | "declined" | "error" | "info";
+
+function answerKind(resp: AskResponse): AnswerKind {
+  if (resp.declined) return "declined";
+  if (resp.success) return "success";
+  if (resp.error_message) return "error";
+  return "info";
+}
+
+function kindLabel(kind: AnswerKind): string {
+  switch (kind) {
+    case "success":
+      return "Answer";
+    case "declined":
+      return "Declined";
+    case "error":
+      return "Error";
+    default:
+      return "Info";
+  }
 }
 
 // ---------------------------------------------------------------------------

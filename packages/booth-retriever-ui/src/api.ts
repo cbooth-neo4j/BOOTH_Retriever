@@ -9,6 +9,8 @@
 import type {
   ApprovalResult,
   ApproveRequest,
+  AskRequest,
+  AskResponse,
   EditRequest,
   FeedbackRequest,
   PendingQuery,
@@ -106,4 +108,9 @@ export async function submitFeedback(
     jsonPost(body),
   );
   await handle<void>(resp);
+}
+
+export async function askQuestion(body: AskRequest): Promise<AskResponse> {
+  const resp = await fetch("/api/ask", jsonPost(body));
+  return handle<AskResponse>(resp);
 }

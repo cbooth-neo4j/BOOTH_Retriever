@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   approveQuery,
+  askQuestion,
   editQuery,
   fetchQueries,
   fetchQuery,
@@ -146,6 +147,42 @@ describe("api.ts happy paths", () => {
     const { calls } = stubFetch(() => emptyResponse(204));
     await submitFeedback("q1", { helpful: true });
     expect(calls[0]?.init?.body).toBe(JSON.stringify({ helpful: true }));
+  });
+
+  it("askQuestion posts the question and parses the response", async () => {
+    const { calls } = stubFetch(() =>
+      jsonResponse({
+        success: true,
+        answer: "42",
+        query_id: "q-123",
+        similar_match: true,
+        high_risk: false,
+        declined: false,
+        cypher_used: "MATCH (n) RETURN count(n)",
+        tool_used: "cache_hit",
+        error_message: null,
+        pending_feedback: true,
+      }),
+    );
+
+    const resp = await askQuestion({
+      query_text: "How many nodes?",
+      is_high_risk: false,
+    });
+
+    expect(resp.answer).toBe("42");
+    expect(resp.query_id).toBe("q-123");
+    expect(resp.similar_match).toBe(true);
+    expect(resp.tool_used).toBe("cache_hit");
+
+    const call = calls[0];
+    expect(call?.url).toBe("/api/ask");
+    expect(call?.init?.method).toBe("POST");
+    expect(call?.init?.body).toBe(
+      JSON.stringify({ query_text: "How many nodes?", is_high_risk: false }),
+    );
+    const headers = new Headers(call?.init?.headers);
+    expect(headers.get("Content-Type")).toBe("application/json");
   });
 });
 
