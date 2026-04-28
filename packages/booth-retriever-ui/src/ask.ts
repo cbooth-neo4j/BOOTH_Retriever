@@ -126,6 +126,21 @@ function main(): void {
       els.form.requestSubmit();
     }
   });
+
+  // Example chips: clicking one populates the textarea (and ticks
+  // High-risk when the chip is flagged that way) so a single click
+  // demonstrates the corresponding BOOTH path.
+  for (const chip of document.querySelectorAll<HTMLButtonElement>(
+    ".example-chip[data-example]",
+  )) {
+    chip.addEventListener("click", () => {
+      const text = chip.dataset.example ?? "";
+      els.input.value = text;
+      els.risk.checked = chip.dataset.highRisk === "true";
+      els.input.focus();
+      els.input.setSelectionRange(text.length, text.length);
+    });
+  }
 }
 
 if (document.readyState === "loading") {

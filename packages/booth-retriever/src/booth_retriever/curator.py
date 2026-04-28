@@ -11,6 +11,7 @@ Exposes the operations the Train-AI page and ``booth curate ...`` CLI need:
     - ``reject(query_id, reason=)``
     - ``edit_fewshot(query_id, cypher_template=, parameters=)``
     - ``submit_feedback(query_id, helpful=)``
+    - ``delete(query_id)``                   -> permanently remove a query
 
 Design:
     - Mutations are idempotent where the data model allows. Approving an
@@ -467,6 +468,40 @@ class BOOTHCurator:
             ).consume()
         if summary.counters.properties_set == 0:
             raise ValueError(f"No Query node with id {query_id!r}")
+
+    # ------------------------------------------------------------------
+    # Mutations: delete
+    # ------------------------------------------------------------------
+
+    def delete(self, query_id: str) -> None:
+        """Permanently delete a Query and any FewShot it owns.
+
+        Used by the Curator UI's "Delete" affordance to retract a query
+        outright (vs. ``reject``, which keeps the node around with a
+        ``rejected`` status). Any linked ``FewShot`` is removed in the
+        same statement: FewShot nodes are 1:1 owned by their Query in
+        BOOTH's data model, so leaving an orphan would just become
+        garbage in the few-shot index.
+
+        Raises:
+            ValueError: if no Query with this id exists.
+        """
+        if not query_id:
+            raise ValueError("query_id must be a non-empty string")
+
+        with self._session() as session:
+            existence = session.run(
+                "MATCH (q:Query {id: $query_id}) RETURN q.id AS id",
+                query_id=query_id,
+            )
+            if existence.single() is None:
+                raise ValueError(f"No Query node with id {query_id!r}")
+            session.run(
+                "MATCH (q:Query {id: $query_id}) "
+                "OPTIONAL MATCH (q)-[:FEW_SHOT_EXAMPLE]->(fs:FewShot) "
+                "DETACH DELETE q, fs",
+                query_id=query_id,
+            )
 
     # ------------------------------------------------------------------
     # Internals

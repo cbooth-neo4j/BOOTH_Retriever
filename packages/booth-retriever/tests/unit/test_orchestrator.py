@@ -14,6 +14,7 @@ DDL surface as test failures.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -42,6 +43,28 @@ class _FakeEmbedder:
     def embed_query(self, text: str) -> list[float]:
         self.calls.append(text)
         return self.vector
+
+
+@dataclass
+class _FakeLLMResponse:
+    """Mirrors neo4j_graphrag.llm.types.LLMResponse enough for our tests."""
+
+    content: str
+
+
+class _FakeLLM:
+    """Records calls and returns ``canned`` (or raises ``exc``) on invoke()."""
+
+    def __init__(self, canned: str = "", exc: Exception | None = None) -> None:
+        self.canned = canned
+        self.exc = exc
+        self.calls: list[dict] = []
+
+    def invoke(self, **kwargs) -> _FakeLLMResponse:
+        self.calls.append(kwargs)
+        if self.exc is not None:
+            raise self.exc
+        return _FakeLLMResponse(content=self.canned)
 
 
 class _FakeResult:
@@ -388,3 +411,146 @@ def test_default_database_passes_no_kwargs_to_session() -> None:
 
     for call in driver.session.call_args_list:
         assert call.kwargs == {}, f"expected default session call, got {call}"
+
+
+# ---------- LLM-backed answer refinement ------------------------------------
+#
+# When an ``llm`` is configured, a successful FewShot execution should hand
+# the raw rows + original question to the LLM and use its reply as the
+# response's ``answer``. The placeholder formatter (single-row/single-column
+# stringification, row-count summary) is preserved as a fallback for both
+# (a) the no-LLM case and (b) LLM failures.
+
+
+def _hit_driver_with_rows(rows: list[dict[str, Any]]):
+    """Convenience: build a driver that yields a single approved match
+    plus the supplied FewShot rows."""
+    return _build_driver(
+        similarity_rows=[
+            {
+                "query_id": "q-llm",
+                "query_text": "How many users?",
+                "score": 0.95,
+                "status": "approved",
+                "fewshot_cypher": "MATCH (u:User) RETURN count(u) AS n",
+                "fewshot_parameters": [],
+            }
+        ],
+        fewshot_rows=rows,
+    )
+
+
+def test_cache_hit_uses_llm_summary_when_llm_configured() -> None:
+    driver = _hit_driver_with_rows([{"n": 42}])
+    llm = _FakeLLM(canned="There are 42 users in the system.")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("How many users are there?")
+
+    assert response.success is True
+    assert response.answer == "There are 42 users in the system."
+    # Raw data still surfaces unchanged for callers that need it.
+    assert response.raw_data == [{"n": 42}]
+    # The LLM was invoked exactly once and got both the question and the rows.
+    assert len(llm.calls) == 1
+    prompt = llm.calls[0]["input"]
+    assert "How many users are there?" in prompt
+    assert '"n": 42' in prompt
+    # System instructions should also have been forwarded.
+    assert "system_instruction" in llm.calls[0]
+    assert "answer-refiner" in llm.calls[0]["system_instruction"]
+
+
+def test_cache_hit_falls_back_to_placeholder_without_llm() -> None:
+    """No LLM configured -> previous MV1 behaviour: stringify the single value."""
+    driver = _hit_driver_with_rows([{"n": 42}])
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder())
+
+    response = orch.process("How many users are there?")
+
+    assert response.success is True
+    assert response.answer == "42"
+
+
+def test_cache_hit_llm_failure_falls_back_to_placeholder() -> None:
+    """A flaky LLM must not break a successful retrieval."""
+    driver = _hit_driver_with_rows([{"n": 7}])
+    llm = _FakeLLM(exc=RuntimeError("rate limit exceeded"))
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("count")
+
+    assert response.success is True
+    assert response.answer == "7"  # placeholder kicked in
+    assert response.raw_data == [{"n": 7}]
+
+
+def test_cache_hit_llm_empty_response_falls_back_to_placeholder() -> None:
+    """If the LLM returns whitespace, fall back instead of returning ''.
+
+    A blank ``answer`` is worse than the placeholder; users see nothing.
+    """
+    driver = _hit_driver_with_rows([{"n": 3}])
+    llm = _FakeLLM(canned="   \n  ")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("count")
+
+    assert response.success is True
+    assert response.answer == "3"
+
+
+def test_cache_hit_llm_strips_surrounding_whitespace() -> None:
+    """Models often pad replies with newlines; we trim them so the UI doesn't
+    have to."""
+    driver = _hit_driver_with_rows([{"name": "Alice"}, {"name": "Bob"}])
+    llm = _FakeLLM(canned="\n\nAlice and Bob.\n  \n")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("Who are the users?")
+
+    assert response.answer == "Alice and Bob."
+
+
+def test_cache_hit_llm_truncates_large_row_sets_in_prompt() -> None:
+    """We cap rows in the prompt at 50 to keep token costs predictable;
+    raw_data still carries the full result set."""
+    rows = [{"i": i} for i in range(120)]
+    driver = _hit_driver_with_rows(rows)
+    llm = _FakeLLM(canned="Lots of rows.")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("list everything")
+
+    assert response.raw_data == rows  # full set preserved
+    prompt = llm.calls[0]["input"]
+    assert '"i": 49' in prompt
+    assert '"i": 50' not in prompt
+    assert "Showing the first 50 of 120 rows" in prompt
+
+
+def test_cache_hit_llm_handles_empty_rows() -> None:
+    """Even with no rows, we still let the LLM frame the answer; if it
+    declines we fall back to the placeholder."""
+    driver = _hit_driver_with_rows([])
+    llm = _FakeLLM(canned="No matching records were found.")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("anyone named Zaphod?")
+
+    assert response.success is True
+    assert response.answer == "No matching records were found."
+    assert response.raw_data == []
+
+
+def test_cache_miss_does_not_invoke_llm() -> None:
+    """The LLM is only consulted on a successful cache hit; cache misses go
+    straight to the curation queue and never hit the model."""
+    driver = _build_driver(similarity_rows=[])
+    llm = _FakeLLM(canned="should not be used")
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder(), llm=llm)
+
+    response = orch.process("brand-new question")
+
+    assert response.tool_used == _TOOL_PENDING_REVIEW
+    assert llm.calls == []

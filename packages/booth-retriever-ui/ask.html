@@ -58,15 +58,9 @@
 
     <main class="ask-layout">
       <section class="ask-card" aria-label="Ask BOOTH a question">
-        <h2>Ask BOOTH</h2>
-        <p class="muted">
-          Questions are routed to the BOOTH retriever. First-time questions
-          are sent to the curation queue; cache hits run the approved
-          Cypher directly.
-        </p>
+        <h2>Your Question</h2>
 
         <form id="ask-form" class="ask-form">
-          <label class="field-label" for="ask-input">Your question</label>
           <textarea
             id="ask-input"
             class="ask-input"
@@ -76,9 +70,37 @@
             required
           ></textarea>
 
+          <div class="ask-examples" aria-label="Example questions">
+            <span class="ask-examples-label">Try one of these:</span>
+            <button
+              type="button"
+              class="example-chip"
+              data-example="What legal and compliance requirements must the potential banking partner meet?"
+            >
+              Legal &amp; compliance requirements
+            </button>
+            <button
+              type="button"
+              class="example-chip"
+              data-example="Which banking partner has offered the most competitive pricing and rebates?"
+              data-high-risk="true"
+            >
+              Most competitive pricing &amp; rebates
+              <span class="example-chip-tag">high-risk</span>
+            </button>
+            <button
+              type="button"
+              class="example-chip"
+              data-example="What is the home address of NovaGrid Energy's CFO?"
+            >
+              CFO's home address
+              <span class="example-chip-tag example-chip-tag-warn">out of scope</span>
+            </button>
+          </div>
+
           <label class="checkbox-row">
             <input id="ask-risk" type="checkbox" />
-            <span>Flag as high-risk (will be auto-declined)</span>
+            <span>High-risk</span>
           </label>
 
           <div class="actions">

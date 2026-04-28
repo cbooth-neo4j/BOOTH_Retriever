@@ -84,7 +84,7 @@ with ask_tab:
         "Your question", placeholder="How many users are in the system?"
     )
     is_high_risk = st.checkbox(
-        "Flag as high-risk (will be auto-declined)", value=False
+        "High-risk", value=False
     )
 
     if st.button("Ask", type="primary", use_container_width=True):

@@ -388,6 +388,42 @@ def test_submit_feedback_raises_when_no_node_updated() -> None:
         curator.submit_feedback("nope", helpful=True)
 
 
+# ---------- Mutations: delete -----------------------------------------------
+
+
+def test_delete_removes_query_and_linked_fewshot() -> None:
+    """Existence check passes, then a DETACH DELETE statement runs."""
+    driver = _build_driver(
+        [
+            {"rows": [{"id": "q1"}]},  # existence check
+            {"counters": {}},  # the delete itself
+        ]
+    )
+    curator = BOOTHCurator(driver=driver)
+
+    curator.delete("q1")
+
+    assert len(driver._executed) == 2
+    delete_cypher, delete_params = driver._executed[1]
+    assert "DETACH DELETE q, fs" in delete_cypher
+    assert "FEW_SHOT_EXAMPLE" in delete_cypher
+    assert delete_params["query_id"] == "q1"
+
+
+def test_delete_raises_when_query_missing() -> None:
+    driver = _build_driver([{"rows": []}])  # existence check returns no row
+    curator = BOOTHCurator(driver=driver)
+    with pytest.raises(ValueError, match="No Query node"):
+        curator.delete("nope")
+
+
+def test_delete_rejects_empty_id() -> None:
+    driver = _build_driver([])
+    curator = BOOTHCurator(driver=driver)
+    with pytest.raises(ValueError, match="non-empty"):
+        curator.delete("")
+
+
 # ---------- Database kwarg forwarding ---------------------------------------
 
 

@@ -275,6 +275,23 @@ def test_reject_missing_query_is_404(curator_client) -> None:
     assert resp.status_code == 404
 
 
+# ---------- Delete ----------------------------------------------------------
+
+
+def test_delete_query_returns_204(curator_client) -> None:
+    client, curator = curator_client
+    resp = client.delete("/api/queries/q1")
+    assert resp.status_code == 204
+    curator.delete.assert_called_once_with("q1")
+
+
+def test_delete_missing_query_is_404(curator_client) -> None:
+    client, curator = curator_client
+    curator.delete.side_effect = ValueError("No Query node with id 'nope'")
+    resp = client.delete("/api/queries/nope")
+    assert resp.status_code == 404
+
+
 # ---------- Feedback --------------------------------------------------------
 
 

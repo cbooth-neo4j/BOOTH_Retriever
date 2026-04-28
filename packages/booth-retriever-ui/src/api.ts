@@ -99,6 +99,13 @@ export async function rejectQuery(
   await handle<void>(resp);
 }
 
+export async function deleteQuery(id: string): Promise<void> {
+  const resp = await fetch(`/api/queries/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  await handle<void>(resp);
+}
+
 export async function submitFeedback(
   id: string,
   body: FeedbackRequest,

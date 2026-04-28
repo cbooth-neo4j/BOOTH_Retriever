@@ -79,6 +79,14 @@ def _default_retriever_factory(curator: BOOTHCurator) -> BOOTHRetriever:
     so tests can monkeypatch it. Reuses the driver already opened for
     curation — one driver per process is plenty.
 
+    Also wires up an ``OpenAILLM`` so that rows returned by an approved
+    FewShot Cypher get refined into a natural-language answer before
+    they're sent back to the browser. The chat model is configurable via
+    ``OPENAI_CHAT_MODEL`` (default ``gpt-4o-mini``); if instantiating it
+    fails (e.g. the optional dependency disappeared) we log and continue
+    without a refiner — answers will fall back to the legacy stringified
+    rows rather than 5xx-ing the Ask endpoint.
+
     Raises:
         _RetrieverUnavailable: if ``OPENAI_API_KEY`` is missing or the
             ``neo4j-graphrag[openai]`` extra isn't installed.
@@ -100,11 +108,40 @@ def _default_retriever_factory(curator: BOOTHCurator) -> BOOTHRetriever:
         model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
     )
     database = os.environ.get("NEO4J_DATABASE")
+    llm = _build_default_llm()
     return BOOTHRetriever(
         driver=curator.driver,
         embedder=embedder,
         neo4j_database=database,
+        llm=llm,
     )
+
+
+def _build_default_llm():
+    """Construct an ``OpenAILLM`` for answer refinement, or ``None`` on failure.
+
+    Returning ``None`` (rather than raising) lets the Ask endpoint stay up
+    when the chat-model dependency is unavailable; the orchestrator will
+    just fall back to the placeholder row formatter in that case.
+    """
+    import logging
+
+    try:
+        from neo4j_graphrag.llm.openai_llm import OpenAILLM
+    except ImportError:  # pragma: no cover - exercised when extra missing
+        logging.getLogger(__name__).warning(
+            "neo4j_graphrag.llm.openai_llm unavailable; answer refinement "
+            "disabled. Install 'booth-retriever[web]' to enable."
+        )
+        return None
+    try:
+        return OpenAILLM(model_name=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"))
+    except Exception as exc:  # noqa: BLE001 - surface as a soft warning
+        logging.getLogger(__name__).warning(
+            "Failed to construct OpenAILLM (%s); answer refinement disabled.",
+            exc,
+        )
+        return None
 
 
 def _default_driver_factory():
@@ -194,7 +231,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -340,6 +377,21 @@ def create_app(
     ) -> Response:
         try:
             curator.reject(query_id, reason=body.reason)
+        except ValueError as exc:
+            raise _map_curator_value_error(exc) from None
+        return Response(status_code=204)
+
+    # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    @app.delete("/api/queries/{query_id}", status_code=204)
+    def delete_query(
+        query_id: str,
+        curator: BOOTHCurator = Depends(get_curator),
+    ) -> Response:
+        try:
+            curator.delete(query_id)
         except ValueError as exc:
             raise _map_curator_value_error(exc) from None
         return Response(status_code=204)

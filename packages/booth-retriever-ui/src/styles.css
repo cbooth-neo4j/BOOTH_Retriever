@@ -497,7 +497,7 @@ select:focus {
 
 .muted { color: var(--app-fg-weaker); }
 .warn  { color: var(--app-warning-text); }
-.hidden { display: none; }
+.hidden { display: none !important; }
 
 /* -------------------------------------------------------------------- */
 /* Toast                                                                */
@@ -589,6 +589,65 @@ select:focus {
 }
 .checkbox-row input[type="checkbox"] {
   accent-color: var(--app-primary);
+}
+
+/* -- Example chips ------------------------------------------------- */
+
+.ask-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ask-examples-label {
+  color: var(--app-fg-weak);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  margin-right: 4px;
+}
+
+.example-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--app-fg-weak);
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.example-chip:hover {
+  color: var(--app-primary-text);
+  border-color: var(--app-primary);
+  background: var(--app-primary-weak-bg);
+}
+.example-chip:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+.example-chip-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--app-danger-weak-bg);
+  color: var(--app-danger-text);
+}
+.example-chip-tag-warn {
+  background: var(--app-bg-weak);
+  color: var(--app-warning-text);
 }
 
 /* -- Answer card --------------------------------------------------- */

@@ -9,12 +9,12 @@
 
 import {
   approveQuery,
+  deleteQuery,
   editQuery,
   fetchQueries,
   fetchQuery,
   fetchStats,
   rejectQuery,
-  submitFeedback,
 } from "./api.js";
 import {
   renderDetail,
@@ -36,7 +36,7 @@ interface AppElements {
 
 const state = {
   selectedId: null as string | null,
-  statusFilter: "" as string,
+  statusFilter: "pending_approval" as string,
 };
 
 function mustGet<T extends HTMLElement>(id: string): T {
@@ -108,7 +108,7 @@ async function selectQuery(els: AppElements, id: string): Promise<void> {
       onApprove: (cypher, params) => void approve(els, detail, cypher, params),
       onEdit: (cypher, params) => void edit(els, detail, cypher, params),
       onReject: (reason) => void reject(els, detail, reason),
-      onFeedback: (helpful) => void feedback(els, detail, helpful),
+      onDelete: () => void remove(els, detail),
     });
   } catch (err) {
     els.detailPane.replaceChildren();
@@ -166,30 +166,31 @@ async function reject(
   try {
     await rejectQuery(detail.query_id, { reason });
     showToast("Rejected", "info");
-    state.selectedId = null;
-    els.detailPane.replaceChildren();
-    const p = document.createElement("p");
-    p.className = "muted";
-    p.textContent = "Select a query on the left to curate it.";
-    els.detailPane.appendChild(p);
+    clearDetail(els);
     await refreshAll(els);
   } catch (err) {
     handleMutationError(els, err);
   }
 }
 
-async function feedback(
-  els: AppElements,
-  detail: QueryDetail,
-  helpful: boolean,
-): Promise<void> {
+async function remove(els: AppElements, detail: QueryDetail): Promise<void> {
   try {
-    await submitFeedback(detail.query_id, { helpful });
-    showToast(`Feedback saved (${helpful ? "helpful" : "not helpful"})`, "info");
+    await deleteQuery(detail.query_id);
+    showToast("Query deleted", "info");
+    clearDetail(els);
     await refreshAll(els);
   } catch (err) {
     handleMutationError(els, err);
   }
+}
+
+function clearDetail(els: AppElements): void {
+  state.selectedId = null;
+  els.detailPane.replaceChildren();
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = "Select a query on the left to curate it.";
+  els.detailPane.appendChild(p);
 }
 
 async function refreshAll(els: AppElements): Promise<void> {

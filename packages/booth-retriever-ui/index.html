@@ -76,12 +76,11 @@
         <div class="pane-header">
           <h2>Queries</h2>
           <select id="status-filter" aria-label="Filter by status">
-            <option value="">Pending (default)</option>
-            <option value="pending_approval">pending_approval</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-            <option value="declined">declined</option>
-            <option value="needs_review">needs_review</option>
+            <option value="pending_approval" selected>Pending approval</option>
+            <option value="needs_review">Needs review</option>
+            <option value="declined">Declined</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
           </select>
         </div>
         <ul id="query-list" class="query-list" role="listbox" aria-label="Queries">

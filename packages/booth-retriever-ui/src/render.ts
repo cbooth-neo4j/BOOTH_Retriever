@@ -123,9 +123,6 @@ function buildQueryRow(row: PendingQuery, opts: QueryListOptions): HTMLElement {
       className: "risk",
       text: row.risk_level ? `risk: ${row.risk_level}` : "risk: n/a",
     }),
-    ...(row.has_fewshot
-      ? [el("span", { className: "badge badge-fewshot", text: "fewshot" })]
-      : []),
   );
 
   const text = el("p", {
@@ -157,7 +154,7 @@ export interface DetailCallbacks {
   onApprove: (cypherTemplate: string, parameters: string[]) => void;
   onEdit: (cypherTemplate: string, parameters: string[]) => void;
   onReject: (reason: string | null) => void;
-  onFeedback: (helpful: boolean) => void;
+  onDelete: () => void;
 }
 
 export function renderDetail(
@@ -254,6 +251,11 @@ export function renderDetail(
     text: "Reject",
     attrs: { type: "button" },
   });
+  const deleteBtn = el("button", {
+    className: "danger",
+    text: "Delete",
+    attrs: { type: "button", title: "Permanently remove this query" },
+  });
 
   const updateDisabled = () => {
     const hasCypher = cypher.value.trim().length > 0;
@@ -283,32 +285,14 @@ export function renderDetail(
     const reason = window.prompt("Rejection reason (optional):", "");
     callbacks.onReject(reason && reason.trim().length > 0 ? reason.trim() : null);
   });
+  deleteBtn.addEventListener("click", () => {
+    const confirmed = window.confirm(
+      "Permanently delete this query and any linked few-shot? This cannot be undone.",
+    );
+    if (confirmed) callbacks.onDelete();
+  });
 
-  actions.append(approveBtn, editBtn, rejectBtn);
-
-  // ---- Feedback sub-bar (only meaningful once a fewshot exists) -----------
-  const feedbackBar = el("div", { className: "feedback-bar" });
-  feedbackBar.append(
-    el("span", { className: "muted", text: "Mark this fewshot:" }),
-    (() => {
-      const b = el("button", {
-        text: "Helpful",
-        className: "link",
-        attrs: { type: "button" },
-      });
-      b.addEventListener("click", () => callbacks.onFeedback(true));
-      return b;
-    })(),
-    (() => {
-      const b = el("button", {
-        text: "Not helpful",
-        className: "link",
-        attrs: { type: "button" },
-      });
-      b.addEventListener("click", () => callbacks.onFeedback(false));
-      return b;
-    })(),
-  );
+  actions.append(approveBtn, editBtn, rejectBtn, deleteBtn);
 
   container.append(
     cypherLabel,
@@ -318,9 +302,6 @@ export function renderDetail(
     params,
     actions,
   );
-  if (detail.fewshot_cypher) {
-    container.appendChild(feedbackBar);
-  }
 }
 
 /** Surface a verification error (422) inline under the cypher textarea. */

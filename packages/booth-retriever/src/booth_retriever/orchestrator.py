@@ -13,10 +13,13 @@ MV1 scope (what this currently does):
     - Embed the user query via the injected embedder.
     - Run a vector-index similarity search over approved ``Query`` nodes.
     - If the top match is above the threshold, execute the linked
-      ``FewShot`` cypher and return the raw data alongside a minimal
-      answer. Parameter extraction is NOT yet implemented; only
-      parameter-free few-shots succeed. Parameterised ones surface an
-      explicit "not yet implemented" error without executing anything.
+      ``FewShot`` cypher. When an ``llm`` is configured, the raw rows
+      are passed to it together with the original question to produce a
+      natural-language answer; otherwise we fall back to a minimal
+      stringified summary of the rows. Parameter extraction is NOT yet
+      implemented; only parameter-free few-shots succeed. Parameterised
+      ones surface an explicit "not yet implemented" error without
+      executing anything.
     - If there's no match, create a ``Query`` node with ``status =
       'pending_approval'`` and return a placeholder response indicating
       the question has been queued for curation.
@@ -29,12 +32,13 @@ MV1 scope (what this currently does):
 Out of scope for MV1 (tracked as follow-up work):
     - Agentic Text2Cypher fallback on cache miss.
     - LLM-based parameter extraction for parameterised few-shots.
-    - LLM-based summarisation of raw results into natural-language answers.
     - ``submit_user_feedback`` and curator reads (``BOOTHCurator``).
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -45,6 +49,10 @@ from .schema import VECTOR_INDEX_NAME
 if TYPE_CHECKING:
     from neo4j import Driver
     from neo4j_graphrag.embeddings import Embedder
+    from neo4j_graphrag.llm.base import LLMInterface
+
+
+_logger = logging.getLogger(__name__)
 
 
 # Default number of similarity-search candidates to fetch. We only need the
@@ -53,6 +61,30 @@ _VECTOR_TOP_K = 5
 
 _TOOL_CACHE_HIT = "fewshot_cache"
 _TOOL_PENDING_REVIEW = "pending_review"
+
+# Cap on how many rows we serialise into the summarisation prompt. FewShot
+# cypher can in principle return thousands of rows, but the LLM only needs
+# a representative sample to phrase the answer. The full ``raw_data`` is
+# still returned on the ``BOOTHResponse`` for callers that need it.
+_MAX_ROWS_FOR_LLM = 50
+
+_SUMMARY_SYSTEM_PROMPT = """You are BOOTH's answer-refiner. You receive:
+
+- a user question, and
+- the JSON rows returned by a curated Cypher query that was chosen for that
+  question.
+
+Write a short, direct natural-language answer to the question, grounded
+strictly in the rows you were given. Rules:
+
+1. Use ONLY facts present in the rows. Do not invent values.
+2. If the rows are empty, say so plainly ("No matching records were found.").
+3. Quote specific names, numbers, and dates from the rows where helpful.
+4. Keep it under three sentences unless the data genuinely warrants more.
+5. Do not mention Cypher, the database, or how the answer was retrieved.
+6. Output prose only — no JSON, no markdown fences, no lists unless the
+   question asks for one.
+"""
 
 
 class BOOTHOrchestrator:
@@ -68,6 +100,12 @@ class BOOTHOrchestrator:
         vector_index_name: Name of the vector index to query. Defaults to
             the one created by ``init_schema``.
         database: Optional Neo4j database name for multi-database setups.
+        llm: Optional ``neo4j_graphrag.llm.LLMInterface`` used to refine
+            the raw rows returned by an approved FewShot Cypher into a
+            natural-language answer. When ``None`` (the default) we fall
+            back to a minimal stringified summary of the rows, matching
+            the original MV1 behaviour. The ``raw_data`` field on the
+            response is unchanged either way.
     """
 
     def __init__(
@@ -78,6 +116,7 @@ class BOOTHOrchestrator:
         similarity_threshold: float = 0.90,
         vector_index_name: str = VECTOR_INDEX_NAME,
         database: str | None = None,
+        llm: LLMInterface | None = None,
     ) -> None:
         if not 0.0 <= similarity_threshold <= 1.0:
             raise ValueError(
@@ -88,6 +127,7 @@ class BOOTHOrchestrator:
         self.similarity_threshold = similarity_threshold
         self.vector_index_name = vector_index_name
         self.database = database
+        self.llm = llm
 
     # ------------------------------------------------------------------
     # Public API
@@ -209,7 +249,7 @@ class BOOTHOrchestrator:
             )
 
         raw_data = self._execute_fewshot(match.fewshot_cypher)
-        answer = self._format_answer_from_rows(raw_data)
+        answer = self._summarise_rows(user_query=user_query, rows=raw_data)
 
         return BOOTHResponse(
             success=True,
@@ -228,9 +268,70 @@ class BOOTHOrchestrator:
             result = session.run(cypher)
             return [dict(record) for record in result]
 
+    def _summarise_rows(
+        self,
+        *,
+        user_query: str,
+        rows: list[dict[str, Any]],
+    ) -> str:
+        """Turn raw FewShot rows into a natural-language answer.
+
+        When ``self.llm`` is configured we hand the LLM the original
+        question plus the rows and let it phrase the answer. If the LLM
+        call fails we degrade silently to ``_format_answer_from_rows`` so
+        a flaky model never breaks an otherwise-successful retrieval.
+        """
+        if self.llm is None:
+            return self._format_answer_from_rows(rows)
+
+        rows_for_prompt = rows[:_MAX_ROWS_FOR_LLM]
+        try:
+            rows_json = json.dumps(rows_for_prompt, default=str, indent=2)
+        except (TypeError, ValueError) as exc:
+            _logger.warning(
+                "Falling back to placeholder summary; rows not JSON-serialisable: %s",
+                exc,
+            )
+            return self._format_answer_from_rows(rows)
+
+        truncated_note = (
+            f"\n\n(Showing the first {_MAX_ROWS_FOR_LLM} of {len(rows)} rows.)"
+            if len(rows) > _MAX_ROWS_FOR_LLM
+            else ""
+        )
+        prompt = (
+            f"User question:\n{user_query}\n\n"
+            f"Rows returned by the approved Cypher (JSON):\n{rows_json}"
+            f"{truncated_note}"
+        )
+
+        try:
+            response = self.llm.invoke(
+                input=prompt,
+                system_instruction=_SUMMARY_SYSTEM_PROMPT,
+            )
+        except Exception as exc:  # noqa: BLE001 - external LLM can fail many ways
+            _logger.warning(
+                "LLM summarisation failed (%s: %s); falling back to placeholder.",
+                type(exc).__name__,
+                exc,
+            )
+            return self._format_answer_from_rows(rows)
+
+        text = getattr(response, "content", None)
+        if text is None:
+            text = str(response)
+        text = text.strip()
+        if not text:
+            return self._format_answer_from_rows(rows)
+        return text
+
     def _format_answer_from_rows(self, rows: list[dict[str, Any]]) -> str:
-        """MV1 placeholder formatting: single-row/single-column gets the value,
-        otherwise a row-count summary. A full LLM-backed summariser comes later.
+        """Minimal stringified summary used when no ``llm`` is configured.
+
+        Single-row/single-column gets the value, otherwise a row-count
+        summary. Also used as a graceful fallback when LLM summarisation
+        raises.
         """
         if not rows:
             return "The approved query ran successfully but returned no rows."

@@ -32,6 +32,7 @@ from .schema import VECTOR_INDEX_NAME
 if TYPE_CHECKING:
     from neo4j import Driver
     from neo4j_graphrag.embeddings import Embedder
+    from neo4j_graphrag.llm.base import LLMInterface
 
 
 class BOOTHRetriever(Retriever):
@@ -65,6 +66,12 @@ class BOOTHRetriever(Retriever):
         neo4j_database: Optional database name for multi-database setups.
         vector_index_name: Name of the vector index on ``Query`` nodes.
             Defaults to the one created by ``init_schema``.
+        llm: Optional ``neo4j_graphrag.llm.LLMInterface``. When supplied,
+            the rows returned by an approved FewShot Cypher are passed to
+            the LLM together with the original question, and the LLM's
+            natural-language reply becomes ``BOOTHResponse.answer``. When
+            omitted, BOOTH falls back to a minimal stringified summary of
+            the rows. ``raw_data`` is unchanged either way.
     """
 
     # Set on the Retriever base class as an ``index_name`` attribute;
@@ -79,6 +86,7 @@ class BOOTHRetriever(Retriever):
         similarity_threshold: float = 0.90,
         neo4j_database: str | None = None,
         vector_index_name: str = VECTOR_INDEX_NAME,
+        llm: LLMInterface | None = None,
     ) -> None:
         super().__init__(driver=driver, neo4j_database=neo4j_database)
         self.index_name = vector_index_name
@@ -88,6 +96,7 @@ class BOOTHRetriever(Retriever):
             similarity_threshold=similarity_threshold,
             vector_index_name=vector_index_name,
             database=neo4j_database,
+            llm=llm,
         )
 
     # ------------------------------------------------------------------
