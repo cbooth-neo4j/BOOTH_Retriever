@@ -257,6 +257,55 @@ def _render_stats(s: CuratorStats, *, json_out: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# booth migrate-statuses
+# ---------------------------------------------------------------------------
+
+
+@app.command("migrate-statuses")
+def migrate_statuses(
+    uri: str = URI_OPT,
+    user: str = USER_OPT,
+    password: str = PASSWORD_OPT,
+    database: str = DATABASE_OPT,
+) -> None:
+    """Re-label legacy statuses (pending_approval, declined) as needs_review."""
+    curator, driver = _make_curator_or_exit(uri, user, password, database)
+    try:
+        migrated = curator.migrate_statuses()
+    finally:
+        driver.close()
+    typer.echo(f"Migrated {migrated} query node(s) to 'needs_review'.")
+
+
+# ---------------------------------------------------------------------------
+# booth compact-questions
+# ---------------------------------------------------------------------------
+
+
+@app.command("compact-questions")
+def compact_questions(
+    threshold: float = typer.Option(
+        0.99,
+        "--threshold",
+        help="Cosine similarity at/above which questions are merged.",
+        min=0.0,
+        max=1.0,
+    ),
+    uri: str = URI_OPT,
+    user: str = USER_OPT,
+    password: str = PASSWORD_OPT,
+    database: str = DATABASE_OPT,
+) -> None:
+    """Merge near-duplicate UserQuestion nodes (per Query) into one each."""
+    curator, driver = _make_curator_or_exit(uri, user, password, database)
+    try:
+        removed = curator.compact_user_questions(threshold=threshold)
+    finally:
+        driver.close()
+    typer.echo(f"Removed {removed} duplicate UserQuestion node(s).")
+
+
+# ---------------------------------------------------------------------------
 # booth feedback
 # ---------------------------------------------------------------------------
 
@@ -300,8 +349,8 @@ def curate_list(
         None,
         "--status",
         help=(
-            "Filter by a single status. Omit to list all pending "
-            "(pending_approval, declined, needs_review)."
+            "Filter by a single status (needs_review, approved, rejected). "
+            "Omit to list the needs_review curation queue."
         ),
     ),
     limit: int = typer.Option(50, "--limit", help="Max rows to return."),
@@ -402,6 +451,9 @@ def _render_detail(d: QueryDetail, *, json_out: bool) -> None:
                     "rejection_reason": d.rejection_reason,
                     "fewshot_cypher": d.fewshot_cypher,
                     "fewshot_parameters": d.fewshot_parameters,
+                    "attempt_cypher": d.attempt_cypher,
+                    "attempt_rows": d.attempt_rows,
+                    "attempt_error": d.attempt_error,
                 },
                 indent=2,
             )
@@ -422,6 +474,14 @@ def _render_detail(d: QueryDetail, *, json_out: bool) -> None:
         typer.echo(f"  cypher:     {d.fewshot_cypher}")
     else:
         typer.echo("FewShot:     (none)")
+    if d.attempt_cypher or d.attempt_error:
+        typer.echo("Text2Cypher attempt:")
+        if d.attempt_cypher:
+            typer.echo(f"  cypher:     {d.attempt_cypher}")
+        if d.attempt_rows:
+            typer.echo(f"  rows:       {d.attempt_rows}")
+        if d.attempt_error:
+            typer.echo(f"  error:      {d.attempt_error}")
 
 
 # ---------------------------------------------------------------------------

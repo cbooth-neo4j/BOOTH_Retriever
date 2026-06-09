@@ -15,12 +15,21 @@ export interface PendingQuery {
   timestamp: string;
   user_feedback: string | null;
   has_fewshot: boolean;
+  /** ``"procedural_memory"`` for seeded processes, else null/other. */
+  kind: string | null;
+  /** Convenience flag mirroring ``kind === "procedural_memory"``. */
+  is_process: boolean;
 }
 
 export interface QueryDetail extends PendingQuery {
   rejection_reason: string | null;
   fewshot_cypher: string | null;
   fewshot_parameters: string[];
+  /** Most recent Text2Cypher attempt recorded for a declined query. */
+  attempt_cypher: string | null;
+  /** JSON string of the rows the attempt returned (capped server-side). */
+  attempt_rows: string | null;
+  attempt_error: string | null;
 }
 
 export interface ApprovalResult {
@@ -51,6 +60,28 @@ export interface FeedbackRequest {
 export interface AskRequest {
   query_text: string;
   is_high_risk?: boolean;
+}
+
+/** One node in the NVL graph payload from ``GET /api/queries/{id}/graph``. */
+export interface GraphNode {
+  id: string;
+  caption: string;
+  labels: string[];
+  properties: Record<string, unknown>;
+}
+
+/** One relationship in the NVL graph payload. */
+export interface GraphRelationship {
+  id: string;
+  from: string;
+  to: string;
+  caption: string;
+}
+
+/** Response from ``GET /api/queries/{id}/graph`` — NVL-shaped. */
+export interface GraphPayload {
+  nodes: GraphNode[];
+  relationships: GraphRelationship[];
 }
 
 /**

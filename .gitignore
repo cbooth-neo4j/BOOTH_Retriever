@@ -35,6 +35,9 @@ venv.bak/
 # VS Code
 .vscode/
 
+# Cursor (local editor config / plans / MCP)
+.cursor/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

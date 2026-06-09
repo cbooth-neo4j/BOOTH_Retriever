@@ -357,5 +357,4 @@ For issues or questions:
 
 **Version:** 1.0  
 **Last Updated:** January 2026  
-**Maintained by:** BOOTH Development Team
 

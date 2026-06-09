@@ -79,13 +79,18 @@ def _default_retriever_factory(curator: BOOTHCurator) -> BOOTHRetriever:
     so tests can monkeypatch it. Reuses the driver already opened for
     curation — one driver per process is plenty.
 
-    Also wires up an ``OpenAILLM`` so that rows returned by an approved
-    FewShot Cypher get refined into a natural-language answer before
-    they're sent back to the browser. The chat model is configurable via
-    ``OPENAI_CHAT_MODEL`` (default ``gpt-4o-mini``); if instantiating it
-    fails (e.g. the optional dependency disappeared) we log and continue
-    without a refiner — answers will fall back to the legacy stringified
-    rows rather than 5xx-ing the Ask endpoint.
+    Wires up two LLM-adjacent dependencies:
+
+      * ``OpenAILLM`` for refining approved-FewShot rows into a
+        natural-language answer (configurable via ``OPENAI_CHAT_MODEL``,
+        default ``gpt-4o-mini``); failure here logs a warning and
+        proceeds without a refiner so the Ask endpoint stays up.
+      * A ``HybridRetriever``-backed ``GraphRAG`` used as the
+        BOOTHRetriever's ``fallback`` for low-risk cache misses. Wrapped
+        in a tiny lambda that returns just the generated answer text.
+        If construction fails (e.g. fulltext index missing) we log and
+        proceed without a fallback — misses then surface the original
+        queued-for-curation placeholder.
 
     Raises:
         _RetrieverUnavailable: if ``OPENAI_API_KEY`` is missing or the
@@ -109,12 +114,94 @@ def _default_retriever_factory(curator: BOOTHCurator) -> BOOTHRetriever:
     )
     database = os.environ.get("NEO4J_DATABASE")
     llm = _build_default_llm()
+    fallback = _build_hybrid_fallback(curator)
+    text2cypher = _build_text2cypher(curator)
     return BOOTHRetriever(
         driver=curator.driver,
         embedder=embedder,
         neo4j_database=database,
         llm=llm,
+        fallback=fallback,
+        text2cypher=text2cypher,
     )
+
+
+def _build_text2cypher(curator: BOOTHCurator):
+    """Return a ``Callable[[str], Text2CypherAttempt]`` or ``None``.
+
+    Wires ``Text2CypherAgent`` over a ``neo4j_graphrag``
+    ``Text2CypherRetriever`` (schema is introspected from the live graph)
+    so declined high-risk misses still record a generate-and-execute
+    attempt for curation. Soft-failure: any construction problem (missing
+    chat LLM, missing extras) logs a warning and returns ``None`` so the
+    Ask endpoint never 5xxs over an optional feature.
+    """
+    import logging
+
+    llm = _build_default_llm()
+    if llm is None:
+        logging.getLogger(__name__).warning(
+            "Text2Cypher attempts disabled: chat LLM unavailable."
+        )
+        return None
+    try:
+        from neo4j_graphrag.retrievers import Text2CypherRetriever
+
+        from ..agents import Text2CypherAgent
+    except ImportError as exc:  # pragma: no cover - exercised when extra missing
+        logging.getLogger(__name__).warning(
+            "Text2Cypher attempts disabled (%s); install 'booth-retriever[web]'.",
+            exc,
+        )
+        return None
+    try:
+        retriever = Text2CypherRetriever(
+            driver=curator.driver,
+            llm=llm,
+            neo4j_database=os.environ.get("NEO4J_DATABASE"),
+        )
+    except Exception as exc:  # noqa: BLE001 - soft-failure by design
+        logging.getLogger(__name__).warning(
+            "Failed to construct Text2CypherRetriever (%s); attempts disabled.",
+            exc,
+        )
+        return None
+    return Text2CypherAgent(retriever).attempt
+
+
+def _build_hybrid_fallback(curator: BOOTHCurator):
+    """Return a ``Callable[[str], str]`` HybridRetriever fallback, or ``None``.
+
+    Soft-failure design: if anything goes wrong (missing API key,
+    missing extras, missing index) we log and return ``None`` so the
+    BOOTH cache + curation queue still works. The Ask endpoint never
+    5xxs because of fallback-construction issues.
+    """
+    import logging
+
+    try:
+        rag = _build_default_graphrag(curator)
+    except Exception as exc:  # noqa: BLE001 - soft-failure by design; includes missing-index errors
+        logging.getLogger(__name__).warning(
+            "HybridRetriever fallback unavailable (%s); cache misses will "
+            "return the queued-for-curation placeholder.",
+            exc,
+        )
+        return None
+
+    try:
+        top_k = int(os.environ.get("DEFAULT_RETRIEVER_TOP_K", "5"))
+    except ValueError:
+        top_k = 5
+
+    def _fallback(query_text: str) -> str:
+        result = rag.search(
+            query_text=query_text,
+            retriever_config={"top_k": top_k},
+        )
+        return result.answer or ""
+
+    return _fallback
 
 
 def _build_default_llm():
@@ -142,6 +229,66 @@ def _build_default_llm():
             exc,
         )
         return None
+
+
+def _build_default_graphrag(curator: BOOTHCurator):
+    """Construct a vanilla ``neo4j-graphrag`` ``GraphRAG`` over a ``HybridRetriever``.
+
+    Used by ``POST /api/ask-default`` to demonstrate the prebuilt-retriever
+    baseline (vector index ``chunk_embeddings`` + fulltext index
+    ``chunk_fulltext_idx``) on the same Neo4j the curator already owns. No
+    BOOTH cache, no FewShot lookup, no Cypher template — pure default
+    retrieval-augmented generation.
+
+    Index names are configurable via ``DEFAULT_VECTOR_INDEX`` and
+    ``DEFAULT_FULLTEXT_INDEX`` so a deployment with non-standard names can
+    point this at the right indexes without code changes.
+
+    Raises:
+        _RetrieverUnavailable: if ``OPENAI_API_KEY`` is missing, the
+            ``neo4j-graphrag[openai]`` extras aren't importable, or the
+            chat LLM can't be constructed (the default path can't
+            generate an answer without one).
+    """
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise _RetrieverUnavailable(
+            "OPENAI_API_KEY is not set. The default retriever needs an "
+            "embedder; set OPENAI_API_KEY in the environment (or a .env "
+            "file) and retry."
+        )
+    try:
+        from neo4j_graphrag.embeddings.openai import OpenAIEmbeddings
+        from neo4j_graphrag.generation import GraphRAG
+        from neo4j_graphrag.retrievers import HybridRetriever
+    except ImportError as exc:  # pragma: no cover - exercised when extra missing
+        raise _RetrieverUnavailable(
+            "neo4j-graphrag HybridRetriever / GraphRAG unavailable. "
+            "Install with:\n    pip install 'booth-retriever[web]'"
+        ) from exc
+
+    embedder = OpenAIEmbeddings(
+        model=os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+    )
+    database = os.environ.get("NEO4J_DATABASE")
+    retriever = HybridRetriever(
+        driver=curator.driver,
+        vector_index_name=os.environ.get(
+            "DEFAULT_VECTOR_INDEX", "chunk_embeddings"
+        ),
+        fulltext_index_name=os.environ.get(
+            "DEFAULT_FULLTEXT_INDEX", "chunk_fulltext_idx"
+        ),
+        embedder=embedder,
+        return_properties=["text", "id"],
+        neo4j_database=database,
+    )
+    llm = _build_default_llm()
+    if llm is None:
+        raise _RetrieverUnavailable(
+            "Chat LLM unavailable; the default retriever path requires "
+            "neo4j-graphrag[openai] (set OPENAI_CHAT_MODEL to override)."
+        )
+    return GraphRAG(retriever=retriever, llm=llm)
 
 
 def _default_driver_factory():
@@ -321,6 +468,22 @@ def create_app(
         return _detail_to_dict(detail)
 
     # ------------------------------------------------------------------
+    # Query graph (for NVL visualisation)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/queries/{query_id}/graph")
+    def get_query_graph(
+        query_id: str,
+        curator: BOOTHCurator = Depends(get_curator),
+    ) -> dict[str, Any]:
+        graph = curator.get_query_graph(query_id)
+        if graph is None:
+            raise HTTPException(
+                status_code=404, detail=f"No query with id {query_id!r}"
+            )
+        return graph
+
+    # ------------------------------------------------------------------
     # Approve
     # ------------------------------------------------------------------
 
@@ -441,6 +604,8 @@ def _pending_to_dict(p: PendingQuery) -> dict[str, Any]:
         "timestamp": p.timestamp,
         "user_feedback": p.user_feedback,
         "has_fewshot": p.has_fewshot,
+        "kind": p.kind,
+        "is_process": p.kind == "procedural_memory",
     }
 
 
@@ -477,6 +642,11 @@ def _detail_to_dict(d: QueryDetail) -> dict[str, Any]:
         "rejection_reason": d.rejection_reason,
         "fewshot_cypher": d.fewshot_cypher,
         "fewshot_parameters": d.fewshot_parameters,
+        "kind": d.kind,
+        "is_process": d.kind == "procedural_memory",
+        "attempt_cypher": d.attempt_cypher,
+        "attempt_rows": d.attempt_rows,
+        "attempt_error": d.attempt_error,
     }
 
 

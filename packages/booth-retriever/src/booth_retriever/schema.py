@@ -1,9 +1,10 @@
 """Neo4j schema bootstrap for BOOTH.
 
 BOOTH owns a handful of node labels (``Query``, ``UserQuestion``, ``FewShot``,
-``Tool``, ``CypherAttempt``, ``Response``) on top of the customer's existing
-knowledge graph. ``init_schema`` creates the indexes and constraints needed
-for those labels.
+``Tool``, ``CypherAttempt``, ``Response``, plus the procedural-memory labels
+``Step``, ``Agent``, ``System`` and ``DataProduct``) on top of the customer's
+existing knowledge graph. ``init_schema`` creates the indexes and constraints
+needed for those labels.
 
 All DDL statements use ``IF NOT EXISTS`` so calling this function is
 idempotent: running it a second time is a no-op and returns
@@ -126,6 +127,42 @@ def _build_schema_objects(embedding_dimensions: int) -> list[SchemaObject]:
             cypher=(
                 "CREATE CONSTRAINT response_id_unique IF NOT EXISTS "
                 "FOR (r:Response) REQUIRE r.id IS UNIQUE"
+            ),
+        ),
+        SchemaObject(
+            kind="constraint",
+            name="step_id_unique",
+            label="Step",
+            cypher=(
+                "CREATE CONSTRAINT step_id_unique IF NOT EXISTS "
+                "FOR (s:Step) REQUIRE s.id IS UNIQUE"
+            ),
+        ),
+        SchemaObject(
+            kind="constraint",
+            name="agent_name_unique",
+            label="Agent",
+            cypher=(
+                "CREATE CONSTRAINT agent_name_unique IF NOT EXISTS "
+                "FOR (a:Agent) REQUIRE a.name IS UNIQUE"
+            ),
+        ),
+        SchemaObject(
+            kind="constraint",
+            name="system_name_unique",
+            label="System",
+            cypher=(
+                "CREATE CONSTRAINT system_name_unique IF NOT EXISTS "
+                "FOR (s:System) REQUIRE s.name IS UNIQUE"
+            ),
+        ),
+        SchemaObject(
+            kind="constraint",
+            name="data_product_id_unique",
+            label="DataProduct",
+            cypher=(
+                "CREATE CONSTRAINT data_product_id_unique IF NOT EXISTS "
+                "FOR (d:DataProduct) REQUIRE d.id IS UNIQUE"
             ),
         ),
         SchemaObject(

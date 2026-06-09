@@ -11,11 +11,13 @@ import {
   approveQuery,
   deleteQuery,
   editQuery,
+  fetchGraph,
   fetchQueries,
   fetchQuery,
   fetchStats,
   rejectQuery,
 } from "./api.js";
+import { mountGraph, type GraphHandle } from "./graph.js";
 import {
   renderDetail,
   renderQueryList,
@@ -36,8 +38,17 @@ interface AppElements {
 
 const state = {
   selectedId: null as string | null,
-  statusFilter: "pending_approval" as string,
+  statusFilter: "needs_review" as string,
+  // Live NVL instance for the selected process detail (null for plain queries).
+  graphHandle: null as GraphHandle | null,
 };
+
+function destroyGraph(): void {
+  if (state.graphHandle) {
+    state.graphHandle.destroy();
+    state.graphHandle = null;
+  }
+}
 
 function mustGet<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -102,6 +113,7 @@ async function selectQuery(els: AppElements, id: string): Promise<void> {
     li.setAttribute("aria-selected", String(isSelected));
   }
 
+  destroyGraph();
   try {
     const detail = await fetchQuery(id);
     renderDetail(els.detailPane, detail, {
@@ -110,12 +122,48 @@ async function selectQuery(els: AppElements, id: string): Promise<void> {
       onReject: (reason) => void reject(els, detail, reason),
       onDelete: () => void remove(els, detail),
     });
+    if (detail.is_process) {
+      void mountProcessGraph(els, id);
+    }
   } catch (err) {
     els.detailPane.replaceChildren();
     const p = document.createElement("p");
     p.className = "warn";
     p.textContent = `Failed to load query ${id}: ${describeError(err)}`;
     els.detailPane.appendChild(p);
+  }
+}
+
+/**
+ * Fetch and render the process graph for a procedural-memory query into the
+ * ``#process-graph-frame`` placeholder painted by ``renderDetail``. No-ops if
+ * the selection changed while the request was in flight.
+ */
+async function mountProcessGraph(els: AppElements, id: string): Promise<void> {
+  const frame = els.detailPane.querySelector<HTMLElement>("#process-graph-frame");
+  if (!frame) return;
+  try {
+    const payload = await fetchGraph(id);
+    if (state.selectedId !== id) return;
+    if (payload.nodes.length === 0) {
+      frame.textContent = "No graph data for this process.";
+      frame.classList.add("muted");
+      return;
+    }
+    destroyGraph();
+    // NVL measures its container's height exactly once at construction and
+    // has no ResizeObserver to recover from a zero measurement. Mount on the
+    // next animation frame so the 420px frame is laid out first, otherwise
+    // NVL paints a zero-height canvas (a thin line instead of the graph).
+    requestAnimationFrame(() => {
+      if (state.selectedId !== id) return;
+      const live = els.detailPane.querySelector<HTMLElement>("#process-graph-frame");
+      if (!live) return;
+      state.graphHandle = mountGraph(live, payload);
+    });
+  } catch (err) {
+    frame.textContent = `Graph failed to load: ${describeError(err)}`;
+    frame.classList.add("warn");
   }
 }
 
@@ -186,6 +234,7 @@ async function remove(els: AppElements, detail: QueryDetail): Promise<void> {
 
 function clearDetail(els: AppElements): void {
   state.selectedId = null;
+  destroyGraph();
   els.detailPane.replaceChildren();
   const p = document.createElement("p");
   p.className = "muted";

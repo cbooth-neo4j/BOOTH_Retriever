@@ -13,6 +13,7 @@ import type {
   AskResponse,
   EditRequest,
   FeedbackRequest,
+  GraphPayload,
   PendingQuery,
   QueryDetail,
   RejectRequest,
@@ -120,4 +121,9 @@ export async function submitFeedback(
 export async function askQuestion(body: AskRequest): Promise<AskResponse> {
   const resp = await fetch("/api/ask", jsonPost(body));
   return handle<AskResponse>(resp);
+}
+
+export async function fetchGraph(id: string): Promise<GraphPayload> {
+  const resp = await fetch(`/api/queries/${encodeURIComponent(id)}/graph`);
+  return handle<GraphPayload>(resp);
 }

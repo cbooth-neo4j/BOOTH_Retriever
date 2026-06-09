@@ -21,9 +21,47 @@ from booth_retriever.curator import (
     CuratorStats,
     PendingQuery,
     QueryDetail,
+    _cluster_questions,
+    _cosine,
 )
 
 pytestmark = pytest.mark.unit
+
+
+# ---------- UserQuestion compaction helpers ----------------------------------
+
+
+def test_cosine_identical_and_orthogonal() -> None:
+    assert _cosine([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+    assert _cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+    # Not comparable -> 0.0 (different length / empty / None).
+    assert _cosine([1.0], [1.0, 0.0]) == 0.0
+    assert _cosine(None, [1.0]) == 0.0
+
+
+def test_cluster_questions_merges_near_duplicates_by_embedding() -> None:
+    questions = [
+        {"id": "a", "text": "q", "embedding": [1.0, 0.0], "ts": "2026-01-01", "count": 1},
+        {"id": "b", "text": "q", "embedding": [0.999, 0.001], "ts": "2026-01-02", "count": 1},
+        {"id": "c", "text": "other", "embedding": [0.0, 1.0], "ts": "2026-01-03", "count": 1},
+    ]
+    clusters = _cluster_questions(questions, threshold=0.99)
+    # a+b collapse (cosine ~1.0); c stands alone. Earliest (a) leads its cluster.
+    sizes = sorted(len(c) for c in clusters)
+    assert sizes == [1, 2]
+    big = max(clusters, key=len)
+    assert big[0]["id"] == "a"
+    assert {q["id"] for q in big} == {"a", "b"}
+
+
+def test_cluster_questions_text_fallback_without_embeddings() -> None:
+    questions = [
+        {"id": "a", "text": "Same Question", "embedding": None, "ts": "1", "count": 1},
+        {"id": "b", "text": "same question", "embedding": None, "ts": "2", "count": 1},
+        {"id": "c", "text": "different", "embedding": None, "ts": "3", "count": 1},
+    ]
+    clusters = _cluster_questions(questions, threshold=0.99)
+    assert sorted(len(c) for c in clusters) == [1, 2]
 
 
 # ---------- Driver test double -----------------------------------------------
@@ -123,15 +161,17 @@ def test_list_pending_queries_uses_pending_statuses() -> None:
                         "timestamp": "2026-04-01T10:00:00Z",
                         "user_feedback": None,
                         "has_fewshot": False,
+                        "kind": None,
                     },
                     {
                         "query_id": "q2",
                         "query_text": "drop everything",
-                        "status": "declined",
+                        "status": "needs_review",
                         "risk_level": "high",
                         "timestamp": "2026-04-01T09:00:00Z",
                         "user_feedback": None,
                         "has_fewshot": False,
+                        "kind": "procedural_memory",
                     },
                 ]
             }
@@ -144,7 +184,9 @@ def test_list_pending_queries_uses_pending_statuses() -> None:
     assert len(results) == 2
     assert isinstance(results[0], PendingQuery)
     assert results[0].status == "pending_approval"
-    assert results[1].status == "declined"
+    assert results[1].status == "needs_review"
+    assert results[0].kind is None
+    assert results[1].kind == "procedural_memory"
 
     # Verify the statuses filter was passed correctly
     _cypher, params = driver._executed[0]
@@ -187,6 +229,10 @@ def test_get_returns_detail_with_fewshot() -> None:
                         "rejection_reason": None,
                         "fewshot_cypher": "MATCH (u:User) RETURN count(u)",
                         "fewshot_parameters": [],
+                        "kind": None,
+                        "attempt_cypher": None,
+                        "attempt_error": None,
+                        "attempt_rows": None,
                     }
                 ]
             }
@@ -201,6 +247,41 @@ def test_get_returns_detail_with_fewshot() -> None:
     assert detail.fewshot_cypher == "MATCH (u:User) RETURN count(u)"
     assert detail.fewshot_parameters == []
     assert detail.user_feedback == "helpful"
+    assert detail.attempt_cypher is None
+
+
+def test_get_surfaces_text2cypher_attempt() -> None:
+    driver = _build_driver(
+        [
+            {
+                "rows": [
+                    {
+                        "query_id": "q1",
+                        "query_text": "drop everything",
+                        "status": "needs_review",
+                        "risk_level": "high",
+                        "timestamp": "2026-04-01T10:00:00Z",
+                        "user_feedback": None,
+                        "rejection_reason": None,
+                        "fewshot_cypher": None,
+                        "fewshot_parameters": [],
+                        "kind": None,
+                        "attempt_cypher": "MATCH (n) RETURN n LIMIT 5",
+                        "attempt_error": None,
+                        "attempt_rows": "[{\"n\": 1}]",
+                    }
+                ]
+            }
+        ]
+    )
+    curator = BOOTHCurator(driver=driver)
+
+    detail = curator.get("q1")
+
+    assert detail is not None
+    assert detail.attempt_cypher == "MATCH (n) RETURN n LIMIT 5"
+    assert detail.attempt_rows == "[{\"n\": 1}]"
+    assert detail.attempt_error is None
 
 
 def test_stats_aggregates_by_status() -> None:
@@ -209,7 +290,10 @@ def test_stats_aggregates_by_status() -> None:
             {
                 "rows": [
                     {"status": "approved", "n": 12},
+                    {"status": "needs_review", "n": 2},
+                    # Retired statuses fold into needs_review.
                     {"status": "pending_approval", "n": 3},
+                    {"status": "declined", "n": 4},
                     {"status": "rejected", "n": 1},
                 ]
             }
@@ -221,11 +305,13 @@ def test_stats_aggregates_by_status() -> None:
 
     assert isinstance(stats, CuratorStats)
     assert stats.counts["approved"] == 12
-    assert stats.counts["pending_approval"] == 3
     assert stats.counts["rejected"] == 1
-    # Unseen statuses default to 0
-    assert stats.counts["needs_review"] == 0
-    assert stats.total == 16
+    # Legacy pending_approval (3) + declined (4) fold into needs_review (2).
+    assert stats.counts["needs_review"] == 9
+    # Obsolete buckets are not surfaced at all.
+    assert "pending_approval" not in stats.counts
+    assert "declined" not in stats.counts
+    assert stats.total == 22
 
 
 # ---------- Mutations: approve ----------------------------------------------
@@ -359,14 +445,16 @@ def test_edit_fewshot_updates_and_sets_timestamp() -> None:
     assert "timestamp" in params
 
 
-def test_submit_feedback_helpful_promotes_to_pending_approval() -> None:
+def test_submit_feedback_helpful_lands_in_needs_review() -> None:
     driver = _build_driver([{"counters": {"properties_set": 3}}])
     curator = BOOTHCurator(driver=driver)
 
     curator.submit_feedback("q1", helpful=True)
 
     _, params = driver._executed[0]
-    assert params["status"] == "pending_approval"
+    # Three-state model: helpful feedback now also lands in needs_review;
+    # the recorded feedback string is what distinguishes it.
+    assert params["status"] == "needs_review"
     assert params["feedback"] == "helpful"
 
 
@@ -444,3 +532,90 @@ def test_all_statuses_superset_of_pending_statuses() -> None:
     """ALL_STATUSES must contain every PENDING_STATUS - otherwise
     list_by_status would reject a status used by list_pending."""
     assert set(PENDING_STATUSES).issubset(set(ALL_STATUSES))
+
+
+def test_three_state_taxonomy() -> None:
+    """The simplified model is exactly needs_review / approved / rejected."""
+    assert set(ALL_STATUSES) == {"needs_review", "approved", "rejected"}
+    assert PENDING_STATUSES == ("needs_review",)
+
+
+# ---------- Migration -------------------------------------------------------
+
+
+def test_migrate_statuses_relabels_legacy() -> None:
+    driver = _build_driver([{"rows": [{"migrated": 4}]}])
+    curator = BOOTHCurator(driver=driver)
+
+    migrated = curator.migrate_statuses()
+
+    assert migrated == 4
+    cypher, params = driver._executed[0]
+    assert "needs_review" in cypher
+    assert set(params["legacy"]) == {"pending_approval", "declined"}
+
+
+# ---------- Graph (NVL) -----------------------------------------------------
+
+
+def test_get_query_graph_returns_none_for_missing_query() -> None:
+    driver = _build_driver([{"rows": []}])
+    curator = BOOTHCurator(driver=driver)
+    assert curator.get_query_graph("nope") is None
+
+
+class _FakeNode:
+    """Duck-typed neo4j Node: supports dict(node), .labels, .element_id."""
+
+    def __init__(self, element_id: str, labels: set[str], props: dict) -> None:
+        self.element_id = element_id
+        self.labels = labels
+        self._props = props
+
+    def keys(self):
+        return self._props.keys()
+
+    def __getitem__(self, key):
+        return self._props[key]
+
+
+class _FakeRel:
+    def __init__(self, element_id, rel_type, start, end) -> None:
+        self.element_id = element_id
+        self.type = rel_type
+        self.start_node = start
+        self.end_node = end
+
+
+class _FakePath:
+    def __init__(self, nodes, relationships) -> None:
+        self.nodes = nodes
+        self.relationships = relationships
+
+
+def test_get_query_graph_builds_nvl_payload_from_paths() -> None:
+    q_node = _FakeNode(
+        "1", {"Query"}, {"id": "q1", "text": "count users", "embedding": [0.1, 0.2]}
+    )
+    fs_node = _FakeNode("2", {"FewShot"}, {"id": "fs1", "cypher_template": "RETURN 1"})
+    rel = _FakeRel("10", "FEW_SHOT_EXAMPLE", q_node, fs_node)
+    path = _FakePath([q_node, fs_node], [rel])
+
+    row = {"root": q_node, "in_paths": [], "out_paths": [path]}
+    # provenance query, then the FewShot lookup (no parameter-free fewshot).
+    driver = _build_driver([{"rows": [row]}, {"rows": []}])
+    curator = BOOTHCurator(driver=driver)
+
+    graph = curator.get_query_graph("q1")
+
+    assert graph is not None
+    node_ids = {n["id"] for n in graph["nodes"]}
+    assert node_ids == {"1", "2"}
+    # Embedding must be stripped from the payload.
+    query_node = next(n for n in graph["nodes"] if "Query" in n["labels"])
+    assert "embedding" not in query_node["properties"]
+    assert query_node["caption"] == "count users"
+    assert len(graph["relationships"]) == 1
+    assert graph["relationships"][0]["caption"] == "FEW_SHOT_EXAMPLE"
+    assert graph["relationships"][0]["from"] == "1"
+    assert graph["relationships"][0]["to"] == "2"

@@ -56,13 +56,13 @@ def seeded_driver(neo4j_driver):
     init_schema(neo4j_driver, embedding_dimensions=16)
     _clear_queries(neo4j_driver)
     _seed_query(
-        neo4j_driver, query_id="pending-1", text="pending one", status="pending_approval"
+        neo4j_driver, query_id="pending-1", text="pending one", status="needs_review"
     )
     _seed_query(
-        neo4j_driver, query_id="pending-2", text="pending two", status="pending_approval"
+        neo4j_driver, query_id="pending-2", text="pending two", status="needs_review"
     )
     _seed_query(
-        neo4j_driver, query_id="declined-1", text="risky", status="declined",
+        neo4j_driver, query_id="declined-1", text="risky", status="needs_review",
         risk_level="high",
     )
     _seed_query(
@@ -80,7 +80,7 @@ def test_list_pending_returns_pending_statuses(seeded_driver) -> None:
     results = curator.list_pending(limit=50)
 
     ids = {r.query_id for r in results}
-    # Should include pending_approval and declined but NOT approved
+    # Should include all needs_review queries but NOT approved
     assert ids == {"pending-1", "pending-2", "declined-1"}
     for r in results:
         assert isinstance(r, PendingQuery)
@@ -115,8 +115,7 @@ def test_get_missing_query_returns_none(seeded_driver) -> None:
 def test_stats_counts_by_status(seeded_driver) -> None:
     curator = BOOTHCurator(driver=seeded_driver)
     stats = curator.stats()
-    assert stats.counts["pending_approval"] == 2
-    assert stats.counts["declined"] == 1
+    assert stats.counts["needs_review"] == 3
     assert stats.counts["approved"] == 1
     # Unseen statuses come back as 0 (pre-populated)
     assert stats.counts["rejected"] == 0
@@ -205,13 +204,13 @@ def test_edit_fewshot_updates_existing(seeded_driver) -> None:
     assert detail.fewshot_parameters == ["n"]
 
 
-def test_submit_feedback_helpful_moves_to_pending_approval(seeded_driver) -> None:
+def test_submit_feedback_helpful_moves_to_needs_review(seeded_driver) -> None:
     curator = BOOTHCurator(driver=seeded_driver)
     curator.submit_feedback("approved-1", helpful=True)
 
     detail = curator.get("approved-1")
     assert detail is not None
-    assert detail.status == "pending_approval"
+    assert detail.status == "needs_review"
     assert detail.user_feedback == "helpful"
 
 
@@ -229,3 +228,48 @@ def test_submit_feedback_raises_for_missing_query(seeded_driver) -> None:
     curator = BOOTHCurator(driver=seeded_driver)
     with pytest.raises(ValueError, match="No Query node"):
         curator.submit_feedback(f"missing-{uuid.uuid4()}", helpful=True)
+
+
+# ---------- Migration --------------------------------------------------------
+
+
+def test_migrate_statuses_relabels_legacy(neo4j_driver) -> None:
+    init_schema(neo4j_driver, embedding_dimensions=16)
+    _clear_queries(neo4j_driver)
+    _seed_query(neo4j_driver, query_id="legacy-1", text="a", status="pending_approval")
+    _seed_query(neo4j_driver, query_id="legacy-2", text="b", status="declined")
+    _seed_query(neo4j_driver, query_id="already", text="c", status="approved")
+    curator = BOOTHCurator(driver=neo4j_driver)
+
+    migrated = curator.migrate_statuses()
+
+    assert migrated == 2
+    assert curator.get("legacy-1").status == "needs_review"  # type: ignore[union-attr]
+    assert curator.get("legacy-2").status == "needs_review"  # type: ignore[union-attr]
+    assert curator.get("already").status == "approved"  # type: ignore[union-attr]
+    # Idempotent: nothing left to migrate.
+    assert curator.migrate_statuses() == 0
+
+
+# ---------- Graph (NVL) ------------------------------------------------------
+
+
+def test_get_query_graph_includes_provenance(seeded_driver) -> None:
+    curator = BOOTHCurator(driver=seeded_driver)
+    # Approve so a FewShot exists and is linked into the provenance chain.
+    curator.approve("pending-1", cypher_template="RETURN 1 AS one")
+
+    graph = curator.get_query_graph("pending-1")
+
+    assert graph is not None
+    labels = {tuple(n["labels"]) for n in graph["nodes"]}
+    # The Query and its FewShot must be present.
+    assert ("Query",) in labels
+    assert ("FewShot",) in labels
+    rel_types = {r["caption"] for r in graph["relationships"]}
+    assert "FEW_SHOT_EXAMPLE" in rel_types
+
+
+def test_get_query_graph_missing_returns_none(seeded_driver) -> None:
+    curator = BOOTHCurator(driver=seeded_driver)
+    assert curator.get_query_graph(f"missing-{uuid.uuid4()}") is None

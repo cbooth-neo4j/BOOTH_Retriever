@@ -151,6 +151,50 @@ def test_get_query_missing_returns_404(curator_client) -> None:
     assert "no query" in resp.json()["detail"].lower()
 
 
+def test_get_query_detail_includes_attempt_fields(curator_client) -> None:
+    client, curator = curator_client
+    curator.get.return_value = QueryDetail(
+        query_id="q1",
+        query_text="drop everything",
+        status="needs_review",
+        risk_level="high",
+        timestamp="2026-04-01T10:00Z",
+        attempt_cypher="MATCH (n) RETURN n LIMIT 5",
+        attempt_rows="[]",
+        attempt_error=None,
+    )
+    resp = client.get("/api/queries/q1")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["attempt_cypher"] == "MATCH (n) RETURN n LIMIT 5"
+    assert payload["attempt_rows"] == "[]"
+    assert payload["attempt_error"] is None
+
+
+# ---------- Graph (NVL) -----------------------------------------------------
+
+
+def test_get_query_graph_returns_payload(curator_client) -> None:
+    client, curator = curator_client
+    curator.get_query_graph.return_value = {
+        "nodes": [{"id": "1", "caption": "q", "labels": ["Query"], "properties": {}}],
+        "relationships": [],
+    }
+    resp = client.get("/api/queries/q1/graph")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["nodes"][0]["id"] == "1"
+    assert payload["relationships"] == []
+    curator.get_query_graph.assert_called_once_with("q1")
+
+
+def test_get_query_graph_missing_returns_404(curator_client) -> None:
+    client, curator = curator_client
+    curator.get_query_graph.return_value = None
+    resp = client.get("/api/queries/nope/graph")
+    assert resp.status_code == 404
+
+
 # ---------- Approve ---------------------------------------------------------
 
 

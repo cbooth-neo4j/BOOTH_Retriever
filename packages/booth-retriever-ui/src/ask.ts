@@ -8,7 +8,8 @@
 //   - the only mutable state is which ``query_id`` we should send feedback
 //     against; everything else lives in the DOM.
 
-import { askQuestion, submitFeedback } from "./api.js";
+import { askQuestion, fetchGraph, submitFeedback } from "./api.js";
+import { createGraphPanel, type GraphPanel } from "./graph.js";
 import { renderAnswer, showToast } from "./render.js";
 import { ApiError } from "./types.js";
 
@@ -22,6 +23,7 @@ interface AskElements {
 
 const state = {
   lastQueryId: null as string | null,
+  graphPanel: null as GraphPanel | null,
 };
 
 function mustGet<T extends HTMLElement>(id: string): T {
@@ -70,6 +72,10 @@ async function onSubmit(els: AskElements, ev: SubmitEvent): Promise<void> {
       onFeedback: (helpful) => void sendFeedback(helpful),
     });
     els.answerCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // Visualise the graph behind the answer. Works for declined answers
+    // too (so the saved Text2Cypher attempt is shown). Best-effort: a graph
+    // failure must not hide the answer itself.
+    if (resp.query_id) void showGraph(resp.query_id);
   } catch (err) {
     els.answerCard.classList.add("hidden");
     els.answerCard.replaceChildren();
@@ -77,6 +83,17 @@ async function onSubmit(els: AskElements, ev: SubmitEvent): Promise<void> {
   } finally {
     els.submit.disabled = false;
     els.submit.textContent = originalLabel ?? "Ask";
+  }
+}
+
+async function showGraph(queryId: string): Promise<void> {
+  if (!state.graphPanel) return;
+  try {
+    const payload = await fetchGraph(queryId);
+    state.graphPanel.show(payload);
+  } catch (err) {
+    // Non-fatal: the answer is already rendered. Surface a quiet toast.
+    showToast(`Graph unavailable: ${describeError(err)}`, "info");
   }
 }
 
@@ -116,6 +133,7 @@ function describeError(err: unknown): string {
 
 function main(): void {
   const els = bindElements();
+  state.graphPanel = createGraphPanel();
   els.form.addEventListener("submit", (ev) => void onSubmit(els, ev));
 
   // Ctrl/Cmd+Enter inside the textarea submits — saves a trip to the button

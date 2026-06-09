@@ -131,7 +131,7 @@ def test_query_cache_miss_queues_for_curation(seeded_driver) -> None:
                 id=response.query_id,
             )
         )
-    assert rows[0]["status"] == "pending_approval"
+    assert rows[0]["status"] == "needs_review"
     assert rows[0]["risk"] == "low"
 
 
@@ -148,11 +148,42 @@ def test_high_risk_cache_miss_is_declined(seeded_driver) -> None:
     with seeded_driver.session() as session:
         rows = list(
             session.run(
-                "MATCH (q:Query {id: $id}) RETURN q.status AS status",
+                "MATCH (q:Query {id: $id}) "
+                "RETURN q.status AS status, q.risk_level AS risk",
                 id=response.query_id,
             )
         )
-    assert rows[0]["status"] == "declined"
+    # High-risk declines share the needs_review bucket; risk_level distinguishes.
+    assert rows[0]["status"] == "needs_review"
+    assert rows[0]["risk"] == "high"
+
+
+def test_high_risk_cache_miss_records_text2cypher_attempt(seeded_driver) -> None:
+    from booth_retriever.models import Text2CypherAttempt
+
+    def fake_t2c(question: str) -> Text2CypherAttempt:
+        return Text2CypherAttempt(cypher="MATCH (n) RETURN n LIMIT 1", rows=[{"n": 1}])
+
+    embedder = _FakeEmbedder()
+    retriever = BOOTHRetriever(
+        driver=seeded_driver, embedder=embedder, text2cypher=fake_t2c
+    )
+
+    response = retriever.query("drop everything", is_high_risk=True)
+    assert response.declined is True
+
+    with seeded_driver.session() as session:
+        rows = list(
+            session.run(
+                "MATCH (q:Query {id: $id})-[:HAS_ATTEMPT]->(ca:CypherAttempt)"
+                "-[:PRODUCED]->(r:Response) "
+                "RETURN ca.cypher AS cypher, r.row_count AS row_count",
+                id=response.query_id,
+            )
+        )
+    assert len(rows) == 1
+    assert rows[0]["cypher"] == "MATCH (n) RETURN n LIMIT 1"
+    assert rows[0]["row_count"] == 1
 
 
 def test_search_returns_retriever_result_shape(seeded_driver) -> None:

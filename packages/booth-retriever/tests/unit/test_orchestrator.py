@@ -347,13 +347,14 @@ def test_cache_miss_low_risk_queues_for_curation() -> None:
         if "CREATE (q:Query" in c and ":UserQuestion" not in c
     ]
     assert len(create_query_calls) == 1
-    assert create_query_calls[0]["status"] == "pending_approval"
+    # Three-state model: every miss lands in the needs_review bucket.
+    assert create_query_calls[0]["status"] == "needs_review"
     assert create_query_calls[0]["risk_level"] == "low"
     # The id passed to Cypher matches the id returned to the caller
     assert create_query_calls[0]["id"] == response.query_id
 
 
-def test_cache_miss_high_risk_declines_and_stores_as_declined() -> None:
+def test_cache_miss_high_risk_declines_and_stores_as_needs_review() -> None:
     driver = _build_driver(similarity_rows=[])
     orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder())
 
@@ -369,8 +370,51 @@ def test_cache_miss_high_risk_declines_and_stores_as_declined() -> None:
         for c, params in driver._executed
         if "CREATE (q:Query" in c and ":UserQuestion" not in c
     ]
-    assert create_query_calls[0]["status"] == "declined"
+    # High-risk declines now share the needs_review bucket; the high
+    # risk_level is what keeps them distinguishable.
+    assert create_query_calls[0]["status"] == "needs_review"
     assert create_query_calls[0]["risk_level"] == "high"
+
+
+def test_cache_miss_high_risk_records_text2cypher_attempt() -> None:
+    from booth_retriever.models import Text2CypherAttempt
+
+    driver = _build_driver(similarity_rows=[])
+    calls: list[str] = []
+
+    def fake_t2c(question: str) -> Text2CypherAttempt:
+        calls.append(question)
+        return Text2CypherAttempt(
+            cypher="MATCH (n) RETURN n LIMIT 5", rows=[{"n": 1}]
+        )
+
+    orch = BOOTHOrchestrator(
+        driver=driver, embedder=_FakeEmbedder(), text2cypher=fake_t2c
+    )
+
+    response = orch.process("drop everything", is_high_risk=True)
+
+    assert response.declined is True
+    assert calls == ["drop everything"]
+    attempt_calls = [
+        (c, p) for c, p in driver._executed if "CREATE (ca:CypherAttempt" in c
+    ]
+    assert len(attempt_calls) == 1
+    _, params = attempt_calls[0]
+    assert params["attempt_cypher"] == "MATCH (n) RETURN n LIMIT 5"
+    assert params["row_count"] == 1
+    assert "PRODUCED" in attempt_calls[0][0]
+
+
+def test_cache_miss_high_risk_without_text2cypher_records_nothing() -> None:
+    driver = _build_driver(similarity_rows=[])
+    orch = BOOTHOrchestrator(driver=driver, embedder=_FakeEmbedder())
+
+    orch.process("drop everything", is_high_risk=True)
+
+    assert not any(
+        "CREATE (ca:CypherAttempt" in c for c, _ in driver._executed
+    )
 
 
 def test_cache_miss_stores_userquestion_linked_to_new_query() -> None:

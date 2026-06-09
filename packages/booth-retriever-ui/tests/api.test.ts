@@ -14,6 +14,7 @@ import {
   approveQuery,
   askQuestion,
   editQuery,
+  fetchGraph,
   fetchQueries,
   fetchQuery,
   fetchStats,
@@ -147,6 +148,19 @@ describe("api.ts happy paths", () => {
     const { calls } = stubFetch(() => emptyResponse(204));
     await submitFeedback("q1", { helpful: true });
     expect(calls[0]?.init?.body).toBe(JSON.stringify({ helpful: true }));
+  });
+
+  it("fetchGraph requests the graph endpoint and parses the payload", async () => {
+    const { calls } = stubFetch(() =>
+      jsonResponse({
+        nodes: [{ id: "1", caption: "q", labels: ["Query"], properties: {} }],
+        relationships: [],
+      }),
+    );
+    const graph = await fetchGraph("q1");
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0]?.id).toBe("1");
+    expect(calls[0]?.url).toBe("/api/queries/q1/graph");
   });
 
   it("askQuestion posts the question and parses the response", async () => {

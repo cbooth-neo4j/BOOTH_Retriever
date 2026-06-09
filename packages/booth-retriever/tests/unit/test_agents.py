@@ -19,8 +19,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from booth_retriever.agents import RefinementAgent
+from booth_retriever.agents import RefinementAgent, Text2CypherAgent
 from booth_retriever.curator import RefinementResult
+from booth_retriever.models import Text2CypherAttempt
 
 pytestmark = pytest.mark.unit
 
@@ -196,3 +197,69 @@ def test_refine_rejects_empty_question() -> None:
     assert result.success is False
     # And the LLM was never called
     llm.invoke.assert_not_called()
+
+
+# ---------- Text2CypherAgent -------------------------------------------------
+
+
+@dataclass
+class _FakeRawSearchResult:
+    """Mirrors neo4j_graphrag.types.RawSearchResult enough for the agent."""
+
+    records: list
+    metadata: dict
+
+
+class _FakeText2CypherRetriever:
+    def __init__(self, *, result=None, exc: Exception | None = None) -> None:
+        self._result = result
+        self._exc = exc
+        self.calls: list[str] = []
+
+    def get_search_results(self, *, query_text: str):
+        self.calls.append(query_text)
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+
+def test_text2cypher_attempt_captures_cypher_and_rows() -> None:
+    retriever = _FakeText2CypherRetriever(
+        result=_FakeRawSearchResult(
+            records=[{"n": 1}, {"n": 2}],
+            metadata={"cypher": "MATCH (n) RETURN n"},
+        )
+    )
+    agent = Text2CypherAgent(retriever)
+
+    attempt = agent.attempt("how many nodes?")
+
+    assert isinstance(attempt, Text2CypherAttempt)
+    assert attempt.cypher == "MATCH (n) RETURN n"
+    assert attempt.rows == [{"n": 1}, {"n": 2}]
+    assert attempt.error is None
+    assert retriever.calls == ["how many nodes?"]
+
+
+def test_text2cypher_attempt_wraps_exceptions() -> None:
+    exc = RuntimeError("invalid cypher")
+    exc.cypher = "MATCH (n RETURN n"  # type: ignore[attr-defined]
+    retriever = _FakeText2CypherRetriever(exc=exc)
+    agent = Text2CypherAgent(retriever)
+
+    attempt = agent.attempt("bad question")
+
+    assert attempt.error is not None
+    assert "invalid cypher" in attempt.error
+    # When the error carries the generated Cypher, we surface it.
+    assert attempt.cypher == "MATCH (n RETURN n"
+
+
+def test_text2cypher_attempt_rejects_empty_question() -> None:
+    retriever = _FakeText2CypherRetriever()
+    agent = Text2CypherAgent(retriever)
+
+    attempt = agent.attempt("   ")
+
+    assert attempt.error is not None
+    assert retriever.calls == []

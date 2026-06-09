@@ -30,19 +30,81 @@ What's implemented today:
   few-shots execute; parameterised templates return a descriptive error
   (automatic parameter extraction is tracked as follow-up).
 - `BOOTHCurator`: `list_*`, `get`, `stats`, `approve`, `reject`, `edit_fewshot`,
-  `submit_feedback`. Idempotent.
+  `submit_feedback`, `migrate_statuses`, `get_query_graph`. Idempotent.
 - `RefinementAgent`: single-shot LLM call to turn a raw Cypher + question into
   a parameterised template. No `deepagents` dependency.
+- `Text2CypherAgent`: generate-AND-execute Cypher (wraps
+  `neo4j_graphrag.retrievers.Text2CypherRetriever`). On a high-risk decline the
+  orchestrator records the attempt (`CypherAttempt` + `Response`) against the
+  Query for curation; the end user still only sees the decline message.
 - `verify_cypher` / `correct_cypher`: pure-logic Cypher lint. Used by the
   curator to validate templates before accepting.
 - `init_schema`: idempotent DDL bootstrap.
 - `booth` CLI: `init`, `curate list/show/approve/reject/edit`, `feedback`,
   `stats`, with `--json` everywhere for piping.
 - Streamlit reference app at `examples/streamlit_app/`.
+- Procedural-memory seed at `examples/seed_procedural_memory.py`: creates an
+  approved `Query` that is a **command** ("reconcile the APAC custody payment
+  break with UUID …") whose steps form a chain with a data dimension:
+
+  ```
+  (Query)-[:HAS_STEP]->(Step)-[:NEXT]->(Step)-> …
+          (Step)-[:USES_AGENT]->(Agent)-[:USES_TOOL]->(Tool)
+          (Tool)-[:BACKED_BY]->(DataProduct)-[:SOURCED_FROM]->(System)
+  ```
+
+  Given a break UUID the agent works it end to end: retrieve the break from the
+  Transaction Lifecycle Management (TLM) system, map it to its transaction flow,
+  gather wider context from the two core banking systems (Citi, Vanguard),
+  **classify** it (AI judgement) as "Payment in Live" vs "Return of Funds", then
+  — for Payment in Live, the branch expanded here — run due diligence, make the
+  decision, annotate the scenario back into OpsFlow and TLM, and apply the break
+  age rule. The classify step is the divergence; its label dynamically selects
+  the substeps (Return of Funds is a single stub branch). Each `Step` is tagged
+  `deterministic`/`ai_judgement`; `Tool`s are MCP-registry-style callable
+  interfaces with intent-revealing descriptions and a `data`/`capability`
+  category; and each data `Tool` is backed by a governed `DataProduct` carrying
+  the data-readiness scenario (1–4), pipeline `status`, owner, freshness and
+  entitlements, sourced from one of the four `System`s (TLM, Citi, Vanguard,
+  OpsFlow). The Ask page answers the command and the NVL popup (and the
+  Curate-page process graph) visualise the whole procedure including which
+  systems/data products each step depends on.
+- Vanilla-TS web UI at `packages/booth-retriever-ui/`: a Curate page and an
+  Ask page. The Ask page renders the graph behind each answer (provenance
+  chain + answer subgraph) in a right-side NVL popup via
+  `GET /api/queries/{id}/graph`. The Curate page tags every row as a
+  **query** or a **process** (the latter for procedural-memory `Query` nodes,
+  i.e. `kind = "procedural_memory"`) and, for processes only, mounts the same
+  NVL graph inline in the detail pane so the whole procedure is reviewable.
+  Both surfaces use the `d3Force` layout (main-thread, no web worker) so the
+  graph auto-fits instead of stacking every node at the origin.
+
+### Query status model
+
+Three states (simplified from the earlier five):
+
+- `needs_review` — the single curation queue. Absorbs the old
+  `pending_approval` and `declined` states; high-risk declines and
+  thumbs-down feedback land here too and are distinguished by node
+  properties (`risk_level`, `user_feedback`) rather than a separate status.
+- `approved` — has a linked, verified FewShot and serves the cache.
+- `rejected` — explicitly turned down by a curator.
+
+Migrating an existing graph: `booth migrate-statuses` (or
+`BOOTHCurator.migrate_statuses()`) re-labels any legacy
+`pending_approval`/`declined` nodes to `needs_review`.
+
+**Deduplicating questions:** every ask records a `UserQuestion` linked
+`:SIMILAR` to its canonical `Query`. To stop identical re-asks piling up,
+a new node is only created when no existing one for that Query is `>= 0.99`
+cosine similar (the incoming embedding is stored on the node for the
+comparison); otherwise the existing node's `count` is bumped. Clean up a
+pre-existing pile-up with `booth compact-questions` (or
+`BOOTHCurator.compact_user_questions()`), which merges duplicates per Query
+(cosine for embedded nodes, exact-text fallback for legacy ones).
 
 What's NOT implemented yet (deliberate; tracked as future work):
 
-- Agentic Text2Cypher fallback on cache miss. MV1 just queues for curation.
 - LLM-based parameter extraction for parameterised templates at retrieval
   time. The curator stores templates fine; the retriever refuses to run them
   with unresolved `$vars` until extraction is added.
@@ -143,10 +205,11 @@ pipeline.
 curator = BOOTHCurator(driver=driver)
 
 # Read
-curator.list_pending(limit=50)            # pending_approval + declined + needs_review
+curator.list_pending(limit=50)            # the needs_review queue
 curator.list_by_status("approved")
-curator.get(query_id)                     # full detail + linked FewShot
+curator.get(query_id)                     # full detail + linked FewShot + any Text2Cypher attempt
 curator.stats()                           # counts by status
+curator.get_query_graph(query_id)         # NVL-shaped provenance + answer subgraph
 
 # Write
 curator.approve(
@@ -164,8 +227,8 @@ curator.approve(query_id, refinement_agent=agent, raw_cypher="...")
 
 curator.reject(query_id, reason="duplicate of q-1234")
 curator.edit_fewshot(query_id, cypher_template="...", parameters=[...])
-curator.submit_feedback(query_id, helpful=True)   # -> pending_approval
-curator.submit_feedback(query_id, helpful=False)  # -> needs_review
+curator.submit_feedback(query_id, helpful=True)   # -> needs_review (user_feedback="helpful")
+curator.submit_feedback(query_id, helpful=False)  # -> needs_review (user_feedback="not_helpful")
 ```
 
 Approving an already-approved query updates the FewShot in place (no
@@ -200,6 +263,10 @@ booth curate edit <query_id> --cypher "..."
 
 booth feedback <query_id> --helpful
 booth feedback <query_id> --not-helpful
+
+booth migrate-statuses                    # collapse legacy statuses
+booth compact-questions                   # merge duplicate UserQuestions
+booth compact-questions --threshold 0.97
 ```
 
 Use `--json` on read commands to pipe into `jq`.
@@ -236,6 +303,7 @@ Routes (all under `/api`, JSON throughout):
 | GET    | `/api/stats`                      | `stats()`                       |
 | GET    | `/api/queries?status=&limit=`     | `list_pending` / `list_by_status` |
 | GET    | `/api/queries/{id}`               | `get()` (404 if missing)        |
+| GET    | `/api/queries/{id}/graph`         | `get_query_graph()` (NVL payload) |
 | POST   | `/api/queries/{id}/approve`       | `approve()`                     |
 | POST   | `/api/queries/{id}/reject`        | `reject()`                      |
 | POST   | `/api/queries/{id}/edit`          | `edit_fewshot()`                |
@@ -317,8 +385,10 @@ BOOTHRetriever (public, subclass of neo4j_graphrag.retrievers.base.Retriever)
               ├── embedder.embed_query(...)
               ├── driver.session().run(vector_search_cypher)   # cache lookup
               ├── [hit]  -> execute FewShot cypher, return rows
-              └── [miss] -> create Query node with status = pending_approval
+              └── [miss] -> create Query node with status = needs_review
                              + UserQuestion node for audit
+                             + [high-risk] Text2Cypher attempt saved
+                               (CypherAttempt + Response) for curation
 
 BOOTHCurator (public)
      └── driver-backed CRUD over Query, FewShot, UserQuestion nodes

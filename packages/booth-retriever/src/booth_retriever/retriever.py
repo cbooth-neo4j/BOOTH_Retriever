@@ -19,13 +19,14 @@ adapter that translates the response into neo4j-graphrag's types.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import neo4j
 from neo4j_graphrag.retrievers.base import Retriever
 from neo4j_graphrag.types import RawSearchResult, RetrieverResult, RetrieverResultItem
 
-from .models import BOOTHResponse
+from .models import BOOTHResponse, Text2CypherAttempt
 from .orchestrator import BOOTHOrchestrator
 from .schema import VECTOR_INDEX_NAME
 
@@ -72,6 +73,20 @@ class BOOTHRetriever(Retriever):
             natural-language reply becomes ``BOOTHResponse.answer``. When
             omitted, BOOTH falls back to a minimal stringified summary of
             the rows. ``raw_data`` is unchanged either way.
+        fallback: Optional ``Callable[[str], str]`` invoked on a low-risk
+            cache miss; its return value becomes ``BOOTHResponse.answer``
+            (with ``tool_used="graphrag.HybridRetriever"`` by
+            convention). Typical wiring is a
+            ``GraphRAG(retriever=HybridRetriever(...), llm=...)`` lambda
+            so misses get answered by a vanilla neo4j-graphrag pipeline
+            while the curator queue still records the question for
+            future promotion to a FewShot. High-risk misses bypass the
+            fallback by design.
+        text2cypher: Optional ``Callable[[str], Text2CypherAttempt]``
+            invoked on a high-risk (declined) cache miss. The user is
+            still declined, but the generated Cypher + its rows are
+            persisted against the new Query for curation. Typical wiring
+            is ``Text2CypherAgent(Text2CypherRetriever(...)).attempt``.
     """
 
     # Set on the Retriever base class as an ``index_name`` attribute;
@@ -87,6 +102,8 @@ class BOOTHRetriever(Retriever):
         neo4j_database: str | None = None,
         vector_index_name: str = VECTOR_INDEX_NAME,
         llm: LLMInterface | None = None,
+        fallback: Callable[[str], str] | None = None,
+        text2cypher: Callable[[str], Text2CypherAttempt] | None = None,
     ) -> None:
         super().__init__(driver=driver, neo4j_database=neo4j_database)
         self.index_name = vector_index_name
@@ -97,6 +114,8 @@ class BOOTHRetriever(Retriever):
             vector_index_name=vector_index_name,
             database=neo4j_database,
             llm=llm,
+            fallback=fallback,
+            text2cypher=text2cypher,
         )
 
     # ------------------------------------------------------------------

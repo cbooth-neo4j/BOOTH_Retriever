@@ -29,9 +29,11 @@ import re
 from typing import TYPE_CHECKING
 
 from .curator import RefinementResult
+from .models import Text2CypherAttempt
 
 if TYPE_CHECKING:
     from neo4j_graphrag.llm.base import LLMInterface
+    from neo4j_graphrag.retrievers import Text2CypherRetriever
 
 
 _SYSTEM_PROMPT = """You convert a concrete Cypher query into a parameterised \
@@ -171,6 +173,48 @@ class RefinementAgent:
         lines.append("")
         lines.append("Return ONLY the JSON object described in the system instructions.")
         return "\n".join(lines)
+
+
+class Text2CypherAgent:
+    """Generate AND execute a Cypher query for a question via an LLM.
+
+    Thin wrapper over ``neo4j_graphrag.retrievers.Text2CypherRetriever``.
+    Unlike ``RefinementAgent`` (which only proposes a template), this agent
+    runs the generated Cypher against the live graph and captures the rows
+    it returned. BOOTH uses it on declined queries: the user still gets the
+    decline message, but the attempt + response are saved for curation.
+
+    Never raises: generation/execution failures come back as a
+    ``Text2CypherAttempt`` with ``error`` set (and ``cypher`` populated when
+    the failure carried a generated query).
+
+    Args:
+        retriever: A constructed ``Text2CypherRetriever``. We only call
+            ``get_search_results(query_text=...)`` on it, so a duck-typed
+            double is easy to supply in tests.
+    """
+
+    def __init__(self, retriever: Text2CypherRetriever) -> None:
+        self._retriever = retriever
+
+    def attempt(self, question: str) -> Text2CypherAttempt:
+        if not question or not question.strip():
+            return Text2CypherAttempt(error="question must not be empty")
+        try:
+            raw = self._retriever.get_search_results(query_text=question)
+        except Exception as exc:  # noqa: BLE001 - LLM / Cypher can fail many ways
+            # Some Text2Cypher errors carry the generated (but invalid)
+            # Cypher; surface it so curators can fix and re-run.
+            return Text2CypherAttempt(
+                cypher=getattr(exc, "cypher", None),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        metadata = getattr(raw, "metadata", None) or {}
+        cypher = metadata.get("cypher")
+        records = getattr(raw, "records", None) or []
+        rows = [dict(rec) for rec in records]
+        return Text2CypherAttempt(cypher=cypher, rows=rows)
 
 
 def _extract_json(text: str) -> dict | None:

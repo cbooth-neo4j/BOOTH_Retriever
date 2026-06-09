@@ -33,6 +33,8 @@ def test_schema_objects_cover_all_booth_labels() -> None:
         "Tool",
         "CypherAttempt",
         "Response",
+        "Step",
+        "Agent",
     }
     labels_with_objects = {obj.label for obj in _build_schema_objects(1536)}
     missing = required_labels - labels_with_objects

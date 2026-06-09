@@ -4,6 +4,7 @@
 // data (or callbacks) and return DOM nodes or mutate an existing container.
 // ``main.ts`` wires them to the API and to event handlers.
 
+import { renderMarkdown } from "./markdown.js";
 import type {
   AskResponse,
   PendingQuery,
@@ -12,13 +13,7 @@ import type {
 } from "./types.js";
 
 /** Display order of status counters in the top bar. */
-const STATUS_ORDER = [
-  "pending_approval",
-  "approved",
-  "rejected",
-  "declined",
-  "needs_review",
-] as const;
+const STATUS_ORDER = ["needs_review", "approved", "rejected"] as const;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -120,6 +115,10 @@ function buildQueryRow(row: PendingQuery, opts: QueryListOptions): HTMLElement {
   top.append(
     el("span", { className: `badge badge-${row.status}`, text: row.status }),
     el("span", {
+      className: `badge badge-kind badge-kind-${row.is_process ? "process" : "query"}`,
+      text: row.is_process ? "process" : "query",
+    }),
+    el("span", {
       className: "risk",
       text: row.risk_level ? `risk: ${row.risk_level}` : "risk: n/a",
     }),
@@ -166,8 +165,12 @@ export function renderDetail(
 
   const header = el("header", { className: "detail-header" });
   header.append(
-    el("h2", { text: "Query detail" }),
+    el("h2", { text: detail.is_process ? "Process detail" : "Query detail" }),
     el("span", { className: `badge badge-${detail.status}`, text: detail.status }),
+    el("span", {
+      className: `badge badge-kind badge-kind-${detail.is_process ? "process" : "query"}`,
+      text: detail.is_process ? "process" : "query",
+    }),
     el("span", {
       className: "muted",
       text: detail.risk_level ? `risk: ${detail.risk_level}` : "risk: n/a",
@@ -178,6 +181,21 @@ export function renderDetail(
   container.appendChild(
     labeled("Question", el("p", { className: "query-text", text: detail.query_text })),
   );
+
+  // ---- Process graph (procedural-memory only) ------------------------------
+  // The frame is mounted with NVL by ``main.ts`` after this render runs, so
+  // it stays a pure DOM placeholder here. Plain queries never get one.
+  if (detail.is_process) {
+    const section = el("section", { className: "process-graph" });
+    section.append(
+      el("span", { className: "field-label", text: "Process graph" }),
+      el("div", {
+        className: "process-graph-frame",
+        attrs: { id: "process-graph-frame" },
+      }),
+    );
+    container.appendChild(section);
+  }
 
   if (detail.rejection_reason) {
     container.appendChild(
@@ -194,6 +212,32 @@ export function renderDetail(
         el("p", { className: "muted", text: detail.user_feedback }),
       ),
     );
+  }
+
+  // ---- Text2Cypher attempt (declined queries) ------------------------------
+  // Read-only: shows what the LLM generated + returned when the query was
+  // declined, so a curator can promote it into a FewShot.
+  if (detail.attempt_cypher || detail.attempt_error || detail.attempt_rows) {
+    const attempt = el("div", { className: "attempt-block" });
+    attempt.appendChild(
+      el("span", { className: "field-label", text: "Text2Cypher attempt" }),
+    );
+    if (detail.attempt_cypher) {
+      attempt.appendChild(
+        el("pre", { className: "attempt-cypher", text: detail.attempt_cypher }),
+      );
+    }
+    if (detail.attempt_rows) {
+      attempt.appendChild(
+        el("pre", { className: "attempt-rows", text: detail.attempt_rows }),
+      );
+    }
+    if (detail.attempt_error) {
+      attempt.appendChild(
+        el("p", { className: "warn", text: detail.attempt_error }),
+      );
+    }
+    container.appendChild(attempt);
   }
 
   // ---- Cypher textarea -----------------------------------------------------
@@ -353,9 +397,19 @@ export function renderAnswer(
   );
   container.appendChild(banner);
 
-  container.appendChild(
-    el("p", { className: `answer-text answer-text-${kind}`, text: resp.answer }),
-  );
+  // Successful answers may contain Markdown (the LLM prompt allows
+  // headings, bullets, bold/italic, inline code). For declined / error
+  // / info banners we keep the raw text so the system message is shown
+  // verbatim — those never contain Markdown by design.
+  const answerBody = el("div", {
+    className: `answer-text answer-text-${kind}`,
+  });
+  if (kind === "success" && resp.answer) {
+    answerBody.appendChild(renderMarkdown(resp.answer));
+  } else {
+    answerBody.textContent = resp.answer;
+  }
+  container.appendChild(answerBody);
 
   // Metadata — collapsed by default; mirrors Streamlit's st.json(...) expander.
   const details = el("details", { className: "answer-meta" });

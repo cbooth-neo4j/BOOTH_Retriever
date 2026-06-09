@@ -38,7 +38,7 @@ Typical quickstart:
 
 from __future__ import annotations
 
-from .agents import RefinementAgent
+from .agents import RefinementAgent, Text2CypherAgent
 from .curator import (
     ALL_STATUSES,
     PENDING_STATUSES,
@@ -49,7 +49,7 @@ from .curator import (
     QueryDetail,
     RefinementResult,
 )
-from .models import BOOTHResponse
+from .models import BOOTHResponse, Text2CypherAttempt
 from .retriever import BOOTHRetriever
 from .schema import SchemaInitResult, init_schema
 from .verification import (
@@ -77,6 +77,8 @@ __all__ = [
     "RefinementAgent",
     "RefinementResult",
     "SchemaInitResult",
+    "Text2CypherAgent",
+    "Text2CypherAttempt",
     "VerificationResult",
     "correct_cypher",
     "init_schema",
